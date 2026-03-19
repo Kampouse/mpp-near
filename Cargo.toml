@@ -48,10 +48,21 @@ uuid = { version = "1.0", features = ["v4"] }
 bs58 = "0.5"
 anyhow = "1.0"
 
+# CLI dependencies
+clap = { version = "4.5", features = ["derive"] }
+toml = "0.8"
+directories = "5.0"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+colored = "2.1"
+
 [dev-dependencies]
 tokio-test = "0.4"
 wiremock = "0.6"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bin]]
+name = "mpp-near"
+path = "src/bin/mpp-near.rs"
+required-features = ["client"]
 
 [[example]]
 name = "near_client"
