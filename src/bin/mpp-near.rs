@@ -3,14 +3,18 @@
 use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
-use mpp_near::types::AccountId;
+use mpp_near::types::{AccountId, NearAmount};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[cfg(feature = "client")]
 use mpp_near::client::NearProvider;
 
 #[cfg(feature = "intents")]
 use mpp_near::client::IntentsProvider;
+
+#[cfg(feature = "server")]
+use mpp_near::server::{NearVerifier, VerifierConfig};
 
 #[derive(Parser)]
 #[command(name = "mpp-near")]
@@ -77,8 +81,83 @@ enum Commands {
         account: Option<String>,
     },
 
+    /// Verify a transaction
+    Verify {
+        /// Transaction hash to verify
+        #[arg(short, long)]
+        tx_hash: String,
+
+        /// Expected amount in NEAR (for verification)
+        #[arg(long)]
+        expected_amount: Option<String>,
+
+        /// Expected recipient (for verification)
+        #[arg(long)]
+        expected_recipient: Option<String>,
+    },
+
+    /// Start a payment server
+    Server {
+        /// Port to listen on
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+
+        /// Recipient account for payments
+        #[arg(short, long)]
+        recipient: String,
+
+        /// Minimum payment amount in NEAR
+        #[arg(long, default_value = "0.001")]
+        min_amount: String,
+    },
+
     /// List available tokens (intents only)
     Tokens,
+
+    /// Create a payment check (intents only)
+    CreateCheck {
+        /// Amount in token units
+        #[arg(short, long)]
+        amount: String,
+
+        /// Token to use (near, usdc, usdt)
+        #[arg(short = 't', long, default_value = "near")]
+        token: String,
+
+        /// Memo for the check
+        #[arg(short, long)]
+        memo: Option<String>,
+
+        /// Expiry time in seconds
+        #[arg(short, long, default_value = "86400")]
+        expires_in: u64,
+    },
+
+    /// Claim a payment check (intents only)
+    ClaimCheck {
+        /// Check key to claim
+        #[arg(short, long)]
+        check_key: String,
+
+        /// Amount to claim (optional, claims all if not specified)
+        #[arg(short, long)]
+        amount: Option<String>,
+    },
+
+    /// Swap tokens (intents only)
+    Swap {
+        /// Token to swap from
+        #[arg(long)]
+        from: String,
+
+        /// Token to swap to
+        #[arg(long)]
+        to: String,
+
+        /// Amount to swap
+        #[arg(short, long)]
+        amount: String,
+    },
 
     /// Show current configuration
     Config,
@@ -108,8 +187,28 @@ async fn main() -> Result<()> {
             cmd_balance(&cli, account.as_deref()).await?;
         }
 
+        Commands::Verify { tx_hash, expected_amount, expected_recipient } => {
+            cmd_verify(&cli, tx_hash, expected_amount.as_deref(), expected_recipient.as_deref()).await?;
+        }
+
+        Commands::Server { port, recipient, min_amount } => {
+            cmd_server(&cli, *port, recipient, min_amount).await?;
+        }
+
         Commands::Tokens => {
             cmd_tokens(&cli).await?;
+        }
+
+        Commands::CreateCheck { amount, token, memo, expires_in } => {
+            cmd_create_check(&cli, amount, token, memo.as_deref(), *expires_in).await?;
+        }
+
+        Commands::ClaimCheck { check_key, amount } => {
+            cmd_claim_check(&cli, check_key, amount.as_deref()).await?;
+        }
+
+        Commands::Swap { from, to, amount } => {
+            cmd_swap(&cli, from, to, amount).await?;
         }
 
         Commands::Config => {
@@ -139,6 +238,11 @@ async fn cmd_pay(cli: &Cli, recipient: &str, amount: &str, token: &str, memo: Op
                     "near" => provider.transfer(&recipient, near_amount).await?,
                     "usdc" => provider.transfer_token(
                         "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+                        &recipient,
+                        near_amount,
+                    ).await?,
+                    "usdt" => provider.transfer_token(
+                        "usdt.tether-token.near",
                         &recipient,
                         near_amount,
                     ).await?,
@@ -175,6 +279,16 @@ async fn cmd_pay(cli: &Cli, recipient: &str, amount: &str, token: &str, memo: Op
 
                 let tx_hash = match token {
                     "near" => provider.transfer(&recipient, near_amount).await?,
+                    "usdc" => provider.transfer_token(
+                        &AccountId::new("usdc.contract.near")?,
+                        &recipient,
+                        near_amount,
+                    ).await?,
+                    "usdt" => provider.transfer_token(
+                        &AccountId::new("usdt.tether-token.near")?,
+                        &recipient,
+                        near_amount,
+                    ).await?,
                     _ => return Err(anyhow::anyhow!("Unsupported token: {}", token)),
                 };
 
@@ -215,6 +329,15 @@ async fn cmd_balance(cli: &Cli, account: Option<&str>) -> Result<()> {
                 print_success("Balance retrieved");
                 println!("  Account: {}", account_id);
                 println!("  Balance: {}", balance);
+
+                // Try to get USDC balance
+                match provider.check_intents_balance("17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1").await {
+                    Ok(usdc) => {
+                        let usdc_amount = usdc.0 as f64 / 1_000_000.0;
+                        println!("  USDC:    {:.6}", usdc_amount);
+                    }
+                    Err(_) => {}
+                }
             }
 
             #[cfg(not(feature = "intents"))]
@@ -244,6 +367,84 @@ async fn cmd_balance(cli: &Cli, account: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+async fn cmd_verify(cli: &Cli, tx_hash: &str, expected_amount: Option<&str>, expected_recipient: Option<&str>) -> Result<()> {
+    print_info(&format!("Verifying transaction: {}", tx_hash));
+
+    println!();
+    println!("Transaction Details:");
+    println!("  Hash:    {}", tx_hash);
+
+    if let Some(amt) = expected_amount {
+        println!("  Expected amount:      {} NEAR", amt);
+    }
+
+    if let Some(rec) = expected_recipient {
+        println!("  Expected recipient:   {}", rec);
+    }
+
+    println!();
+    print_info("Note: Full verification requires RPC access");
+    print_info("Use near-cli or NEAR explorer for detailed verification");
+
+    Ok(())
+}
+
+async fn cmd_server(cli: &Cli, port: u16, recipient: &str, min_amount: &str) -> Result<()> {
+    #[cfg(feature = "server")]
+    {
+        let recipient_account = AccountId::new(recipient)?;
+        let min_near: f64 = min_amount.parse()
+            .map_err(|_| anyhow::anyhow!("Invalid min_amount: {}", min_amount))?;
+        let min_amount_yocto = (min_near * 1e24) as u128;
+
+        print_info(&format!("Starting payment server on port {}", port));
+        print_info(&format!("Recipient: {}", recipient_account));
+        print_info(&format!("Min amount: {} NEAR", min_amount));
+
+        let config = VerifierConfig {
+            recipient_account: recipient_account.clone(),
+            min_amount: mpp_near::types::NearAmount::from_yocto(min_amount_yocto),
+            ..Default::default()
+        };
+
+        let verifier = NearVerifier::new(config)?;
+        let verifier = Arc::new(verifier);
+
+        use axum::{routing::get, Router};
+        use serde_json::json;
+
+        let app = Router::new()
+            .route("/", get(|| async { axum::Json(json!({"name": "mpp-near-server", "version": env!("CARGO_PKG_VERSION")})) }))
+            .route("/health", get(|| async { axum::Json(json!({"status": "healthy"})) }))
+            .route("/challenge", get(|axum::extract::State(v): axum::extract::State<Arc<NearVerifier>>| async move {
+                match v.charge("1").await {
+                    Ok(challenge) => axum::Json(json!({"status": "payment_required", "challenge": challenge})),
+                    Err(e) => axum::Json(json!({"error": e.to_string()})),
+                }
+            }))
+            .with_state(verifier);
+
+        let addr = format!("0.0.0.0:{}", port);
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+        print_success(&format!("Server listening on http://{}", addr));
+        println!();
+        println!("Endpoints:");
+        println!("  GET /          - API info");
+        println!("  GET /health    - Health check");
+        println!("  GET /challenge - Create payment challenge");
+        println!();
+        println!("Ready to accept payments via MPP!");
+
+        axum::serve(listener, app).await?;
+    }
+
+    #[cfg(not(feature = "server"))]
+    return Err(anyhow::anyhow!("Server feature not enabled. Compile with --features server"));
+
+    Ok(())
+}
+
 async fn cmd_tokens(cli: &Cli) -> Result<()> {
     #[cfg(feature = "intents")]
     {
@@ -257,12 +458,126 @@ async fn cmd_tokens(cli: &Cli) -> Result<()> {
 
         print_success(&format!("Found {} tokens", tokens.len()));
 
-        for token in tokens.iter().take(20) {
-            println!("  {:6} - {} ({})", token.symbol, token.name, token.chain);
+        // Group by chain
+        let mut by_chain: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
+        for token in tokens {
+            by_chain.entry(token.chain.clone()).or_default().push(token);
         }
 
-        if tokens.len() > 20 {
-            println!("  ... and {} more", tokens.len() - 20);
+        for (chain, mut chain_tokens) in by_chain {
+            println!();
+            println!("{}", chain.to_uppercase().bold());
+            chain_tokens.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+
+            for token in chain_tokens.iter().take(10) {
+                println!("  {:6} - {} ({} decimals)", token.symbol, token.name, token.decimals);
+            }
+
+            if chain_tokens.len() > 10 {
+                println!("  ... and {} more", chain_tokens.len() - 10);
+            }
+        }
+    }
+
+    #[cfg(not(feature = "intents"))]
+    return Err(anyhow::anyhow!("Intents feature not enabled"));
+
+    Ok(())
+}
+
+async fn cmd_create_check(cli: &Cli, amount: &str, token: &str, memo: Option<&str>, expires_in: u64) -> Result<()> {
+    #[cfg(feature = "intents")]
+    {
+        let api_key = cli.api_key.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("--api-key required"))?;
+
+        let near_amount = parse_amount_token(amount, token)?;
+
+        print_info(&format!("Creating payment check for {} {}...", amount, token));
+
+        let provider = IntentsProvider::new(api_key.clone());
+        let token_id = get_token_id(token);
+
+        let check = provider.create_payment_check(
+            token_id,
+            near_amount,
+            memo,
+            Some(expires_in),
+        ).await?;
+
+        print_success("Payment check created");
+        println!();
+        println!("  Check ID:  {}", check.check_id);
+        println!("  Check Key: {}", check.check_key);
+        println!("  Amount:    {} {}", check.amount, token);
+        if let Some(m) = memo {
+            println!("  Memo:      {}", m);
+        }
+        if let Some(exp) = check.expires_at {
+            println!("  Expires:   {}", exp);
+        }
+        println!();
+        println!("Share the check key with the recipient to claim.");
+    }
+
+    #[cfg(not(feature = "intents"))]
+    return Err(anyhow::anyhow!("Intents feature not enabled"));
+
+    Ok(())
+}
+
+async fn cmd_claim_check(cli: &Cli, check_key: &str, amount: Option<&str>) -> Result<()> {
+    #[cfg(feature = "intents")]
+    {
+        let api_key = cli.api_key.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("--api-key required"))?;
+
+        let near_amount = amount
+            .map(|a| parse_amount_token(a, "near"))
+            .transpose()?;
+
+        print_info(&format!("Claiming payment check {}...", check_key));
+
+        let provider = IntentsProvider::new(api_key.clone());
+        let claimed = provider.claim_payment_check(check_key, near_amount).await?;
+
+        print_success("Payment check claimed!");
+        println!("  Amount claimed: {}", claimed);
+    }
+
+    #[cfg(not(feature = "intents"))]
+    return Err(anyhow::anyhow!("Intents feature not enabled"));
+
+    Ok(())
+}
+
+async fn cmd_swap(cli: &Cli, from: &str, to: &str, amount: &str) -> Result<()> {
+    #[cfg(feature = "intents")]
+    {
+        let api_key = cli.api_key.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("--api-key required"))?;
+
+        let near_amount = parse_amount_token(amount, from)?;
+
+        print_info(&format!("Swapping {} {} to {}...", amount, from, to));
+
+        let provider = IntentsProvider::new(api_key.clone());
+
+        let from_token = get_token_id(from);
+        let to_token = get_token_id(to);
+
+        let result = provider.swap(
+            from_token,
+            to_token,
+            near_amount,
+            None,
+        ).await?;
+
+        print_success("Swap completed (gasless)!");
+        println!("  Request ID: {}", result.request_id);
+        println!("  Amount out: {}", result.amount_out);
+        if let Some(hash) = result.intent_hash {
+            println!("  Intent:     {}", hash);
         }
     }
 
@@ -281,11 +596,24 @@ fn cmd_config(cli: &Cli) -> Result<()> {
     println!("Account:    {:?}", cli.account);
     println!("API Key:    {:?}", cli.api_key.as_ref().map(|_| "(set)"));
     println!();
+    println!("Commands:");
+    println!("  pay          - Send a payment");
+    println!("  balance      - Check account balance");
+    println!("  verify       - Verify a transaction");
+    println!("  server       - Start payment server");
+    println!("  tokens       - List available tokens");
+    println!("  create-check - Create payment check");
+    println!("  claim-check  - Claim payment check");
+    println!("  swap         - Swap tokens");
+    println!("  config       - Show this configuration");
+    println!();
     println!("Example usage:");
     println!("  mpp-near pay --recipient merchant.near --amount 1");
     println!("  mpp-near pay --recipient merchant.near --amount 10 --token usdc");
     println!("  mpp-near balance");
     println!("  mpp-near tokens");
+    println!("  mpp-near swap --from near --to usdc --amount 1");
+    println!("  mpp-near create-check --amount 10 --token usdc");
 
     Ok(())
 }
@@ -296,6 +624,28 @@ fn parse_amount(amount: &str) -> Result<mpp_near::types::NearAmount> {
 
     let yocto = (near * 1e24) as u128;
     Ok(mpp_near::types::NearAmount::from_yocto(yocto))
+}
+
+fn parse_amount_token(amount: &str, token: &str) -> Result<mpp_near::types::NearAmount> {
+    let value: f64 = amount.parse()
+        .map_err(|_| anyhow::anyhow!("Invalid amount: {}", amount))?;
+
+    let yocto = match token {
+        "near" => (value * 1e24) as u128,
+        "usdc" | "usdt" => (value * 1e6) as u128,
+        _ => (value * 1e24) as u128, // Default to NEAR decimals
+    };
+
+    Ok(mpp_near::types::NearAmount::from_yocto(yocto))
+}
+
+fn get_token_id(token: &str) -> &str {
+    match token {
+        "near" => "near",
+        "usdc" => "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+        "usdt" => "usdt.tether-token.near",
+        _ => token,
+    }
 }
 
 fn print_success(message: &str) {
