@@ -89,15 +89,21 @@ impl NearSigner {
             Err(_) => Ok(false),
         }
     }
-    
+
     /// Get public key
-    pub fn public_key(&self) -> &PublicKey {
-        &self.public_key
+    pub fn public_key(&self) -> Result<PublicKey> {
+        Ok(self.public_key.clone())
     }
-    
+
     /// Get account ID
     pub fn account_id(&self) -> &AccountId {
         &self.account_id
+    }
+
+    /// Sign arbitrary bytes
+    pub fn sign_bytes(&self, bytes: &[u8]) -> Result<[u8; 64]> {
+        let signature = self.signing_key.sign(bytes);
+        Ok(signature.to_bytes())
     }
 }
 

@@ -119,6 +119,17 @@ impl NearProvider {
     
     /// Execute NEAR transfer
     pub async fn transfer(&self, recipient: &AccountId, amount: NearAmount) -> Result<TransactionHash> {
+        use near_primitives::{
+            transaction::{Action, TransferAction},
+            types::{BlockReference},
+            views::{AccessKeyView, QueryRequest},
+        };
+        use near_jsonrpc_client::methods::{
+            block::RpcBlockRequest,
+            query::RpcQueryRequest,
+            broadcast_tx_commit::RpcBroadcastTxCommitRequest,
+        };
+
         // Safety check
         if amount.0 > self.config.max_amount.0 {
             return Err(Error::InsufficientBalance {
@@ -126,7 +137,7 @@ impl NearProvider {
                 available: self.config.max_amount.to_string(),
             });
         }
-        
+
         // Check balance
         let balance = self.check_balance().await?;
         if balance.0 < amount.0 {
@@ -135,12 +146,173 @@ impl NearProvider {
                 available: balance.to_string(),
             });
         }
-        
+
         info!("Transferring {} to {}", amount, recipient);
-        
-        // Build transaction (simplified - in production would use near-primitives)
-        let mock_hash = format!("0x{}", hex::encode(&[0u8; 32]));
-        TransactionHash::new(mock_hash)
+
+        // Get latest block hash
+        let block_request = RpcBlockRequest {
+            block_reference: BlockReference::latest(),
+        };
+        let block_response = self.client.call(block_request).await
+            .map_err(|e| Error::TransactionFailed(format!("Failed to get block: {}", e)))?;
+        let block_hash = block_response.header.hash;
+
+        // Get public key
+        let public_key = self.signer.public_key()?;
+
+        // Get the actual nonce by querying the ACCESS KEY (not the account!)
+        // Each access key has its own nonce on NEAR
+        let access_key_query = RpcQueryRequest {
+            request: QueryRequest::ViewAccessKey {
+                account_id: self.config.account_id.as_str().parse()
+                    .map_err(|e| Error::InvalidAccountId(format!("Invalid account ID: {}", e)))?,
+                public_key: public_key.clone(),
+            },
+            block_reference: BlockReference::latest(),
+        };
+
+        let access_key_nonce = match self.client.call(access_key_query).await {
+            Ok(response) => {
+                let json = serde_json::to_string(&response).unwrap_or_default();
+                debug!("Access key response: {}", json);
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
+                    // The response structure has nonce directly at root level
+                    let nonce = value.get("nonce")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0u64);
+                    // Increment nonce because each transaction attempt uses it
+                    nonce + 1
+                } else {
+                    0u64
+                }
+            }
+            Err(e) => {
+                return Err(Error::TransactionFailed(format!(
+                    "Access key for '{}' does not exist on the network. \
+                    Please make sure the public key derived from your private key exists on this account.\n\
+                    You can check access keys with: ./target/debug/check_keys {}\nError: {}",
+                    self.config.account_id, self.config.account_id, e
+                )));
+            }
+        };
+
+        let nonce = access_key_nonce;
+
+        debug!("Using nonce: {}", nonce);
+
+        // Create and sign transaction
+        let signed_tx = self.create_signed_transaction(
+            recipient,
+            amount,
+            &block_hash,
+            nonce,
+        )?;
+
+        let sig_hex = match &signed_tx.signature {
+            near_crypto::Signature::ED25519(sig) => hex::encode(sig.to_bytes()),
+            _ => "unknown".to_string(),
+        };
+
+        debug!("Signed transaction: signer={}, receiver={}, nonce={}, public_key={}, signature={}",
+            signed_tx.transaction.signer_id(),
+            signed_tx.transaction.receiver_id(),
+            signed_tx.transaction.nonce(),
+            signed_tx.transaction.public_key(),
+            sig_hex
+        );
+
+        // Broadcast transaction
+        let broadcast_request = RpcBroadcastTxCommitRequest {
+            signed_transaction: signed_tx.clone(),
+        };
+
+        let response = self.client.call(broadcast_request).await
+            .map_err(|e| Error::TransactionFailed(format!("Failed to broadcast transaction: {}", e)))?;
+
+        // Get transaction hash from the outcome
+        let tx_hash = format!("0x{}", hex::encode(response.transaction_outcome.id.as_ref()));
+
+        info!("Transaction sent with hash: {}", tx_hash);
+        TransactionHash::new(tx_hash)
+    }
+
+    /// Create and sign a transaction
+    fn create_signed_transaction(
+        &self,
+        recipient: &AccountId,
+        amount: NearAmount,
+        block_hash: &near_primitives::hash::CryptoHash,
+        nonce: u64,
+    ) -> Result<near_primitives::transaction::SignedTransaction> {
+        use near_primitives::{
+            transaction::{Action, TransferAction},
+            borsh::BorshSerialize,
+        };
+
+        // Parse account IDs
+        let signer_id: near_primitives::types::AccountId = self.config.account_id.as_str().parse()
+            .map_err(|e| Error::InvalidAccountId(format!("Invalid signer ID: {}", e)))?;
+        let receiver_id: near_primitives::types::AccountId = recipient.as_str().parse()
+            .map_err(|e| Error::InvalidAccountId(format!("Invalid receiver ID: {}", e)))?;
+
+        // Get public key
+        let public_key = self.signer.public_key()?;
+        debug!("Creating transaction with public key: {}", public_key);
+
+        // Create transfer action
+        let action = Action::Transfer(TransferAction { deposit: amount.0 });
+        debug!("Created action: Transfer with deposit: {}", amount.0);
+
+        // Create transaction (TransactionV0)
+        let transaction_v0 = near_primitives::transaction::TransactionV0 {
+            signer_id: signer_id.clone(),
+            public_key: public_key.clone(),
+            nonce,
+            receiver_id,
+            block_hash: *block_hash,
+            actions: vec![action],
+        };
+
+        // Wrap in Transaction enum
+        let transaction = near_primitives::transaction::Transaction::V0(transaction_v0);
+
+        // Sign transaction
+        let signature = self.sign_transaction(&transaction)?;
+
+        Ok(near_primitives::transaction::SignedTransaction::new(
+            signature,
+            transaction,
+        ))
+    }
+
+    /// Sign a transaction
+    fn sign_transaction(
+        &self,
+        transaction: &near_primitives::transaction::Transaction,
+    ) -> Result<near_crypto::Signature> {
+        use near_primitives::borsh::BorshSerialize;
+        use near_primitives::hash::hash;
+
+        // Serialize transaction
+        let mut buffer = Vec::new();
+        transaction.serialize(&mut buffer)
+            .map_err(|e| Error::InvalidSignature(format!("Failed to serialize transaction: {}", e)))?;
+
+        debug!("Signing transaction ({} bytes)", buffer.len());
+        debug!("Transaction bytes (hex): {}", hex::encode(&buffer));
+
+        // Sign the hash of the transaction
+        let tx_hash = hash(&buffer);
+        debug!("Transaction hash: {}", hex::encode(tx_hash.as_ref()));
+
+        let sig_bytes = self.signer.sign_bytes(tx_hash.as_ref())?;
+
+        debug!("Signature: {}", hex::encode(&sig_bytes));
+
+        // Create ed25519 signature from bytes and wrap in near_crypto::Signature
+        let ed_sig = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+
+        Ok(near_crypto::Signature::ED25519(ed_sig))
     }
     
     /// Execute NEP-141 token transfer (USDC, etc.)
@@ -199,8 +371,16 @@ impl NearProvider {
     
     /// Get current block height
     async fn get_block_height(&self) -> Result<u64> {
-        // Simplified - in production would query RPC
-        Ok(123456789)
+        use near_jsonrpc_client::methods::block::RpcBlockRequest;
+
+        let request = RpcBlockRequest {
+            block_reference: near_primitives::types::BlockReference::latest(),
+        };
+
+        let response = self.client.call(request).await
+            .map_err(|e| Error::TransactionFailed(format!("Failed to get block height: {}", e)))?;
+
+        Ok(response.header.height)
     }
     
     /// Get account ID

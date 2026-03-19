@@ -47,6 +47,7 @@ url = "2.5"
 uuid = { version = "1.0", features = ["v4"] }
 bs58 = "0.5"
 anyhow = "1.0"
+sha2 = "0.10"
 
 # CLI dependencies
 clap = { version = "4.5", features = ["derive"] }
@@ -63,6 +64,10 @@ wiremock = "0.6"
 name = "mpp-near"
 path = "src/bin/mpp-near.rs"
 required-features = ["client"]
+
+[[bin]]
+name = "generate-keys"
+path = "src/bin/generate_keys.rs"
 
 [[example]]
 name = "near_client"

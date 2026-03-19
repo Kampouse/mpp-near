@@ -1,8 +1,36 @@
 //! NEAR-specific types for MPP
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Deserializer, Serializer};
 use std::fmt;
 use std::str::FromStr;
+
+/// Serialization helpers for large numbers
+pub mod serde_helpers {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+
+    /// Module for use with serde(with = ...)
+    pub mod u64_as_str {
+        use super::*;
+
+        pub fn serialize<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(&value.to_string())
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            s.parse().map_err(serde::de::Error::custom)
+        }
+    }
+}
 
 /// NEAR account ID (e.g., "kampouse.near" or "64-character hex")
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -69,8 +97,22 @@ impl Gas {
 }
 
 /// NEAR amount in yoctoNEAR (10^-24 NEAR)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NearAmount(pub u128);
+
+impl Serialize for NearAmount {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for NearAmount {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let value = s.parse().map_err(serde::de::Error::custom)?;
+        Ok(NearAmount(value))
+    }
+}
 
 impl NearAmount {
     /// 1 NEAR in yoctoNEAR
@@ -116,8 +158,9 @@ pub struct TransactionHash(String);
 impl TransactionHash {
     pub fn new(hash: impl Into<String>) -> Result<Self, super::Error> {
         let h = hash.into();
-        if h.len() != 44 || !h.starts_with("0x") {
-            return Err(super::Error::InvalidSignature(format!("Invalid tx hash: {}", h)));
+        // CryptoHash is 32 bytes = 64 hex chars + "0x" prefix = 66 chars total
+        if h.len() != 66 || !h.starts_with("0x") {
+            return Err(super::Error::InvalidSignature(format!("Invalid tx hash: {} (expected 66 chars with 0x prefix)", h)));
         }
         Ok(Self(h))
     }
@@ -171,7 +214,8 @@ pub struct NearChallenge {
     pub recipient: AccountId,
     /// Payment method (e.g., "near", "usdc")
     pub method: String,
-    /// Expiration timestamp (Unix nanoseconds)
+    /// Expiration timestamp (Unix nanoseconds, serialized as string)
+    #[serde(with = "serde_helpers::u64_as_str")]
     pub expires_at: u64,
     /// Nonce for replay protection
     pub nonce: String,

@@ -4,8 +4,10 @@ use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
 use mpp_near::types::{AccountId, NearAmount};
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::sync::Arc;
+use std::fs;
+use serde::Deserialize;
 
 #[cfg(feature = "client")]
 use mpp_near::client::NearProvider;
@@ -15,6 +17,61 @@ use mpp_near::client::IntentsProvider;
 
 #[cfg(feature = "server")]
 use mpp_near::server::{NearVerifier, VerifierConfig};
+
+/// Configuration file structure
+#[derive(Debug, Deserialize)]
+struct Config {
+    method: Option<String>,
+    standard: Option<StandardConfig>,
+    intents: Option<IntentsConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StandardConfig {
+    account: Option<String>,
+    private_key: Option<String>,
+    rpc_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IntentsConfig {
+    api_key: Option<String>,
+    api_url: Option<String>,
+}
+
+impl Config {
+    /// Load config from the default path or a custom path
+    fn load(path: Option<&Path>) -> Result<Option<Self>> {
+        let config_path = if let Some(p) = path {
+            p.to_path_buf()
+        } else {
+            // Check multiple locations in order:
+            // 1. .mpp-config in current directory
+            // 2. ~/.mpp-near/config.toml
+            let local_config = PathBuf::from(".mpp-config");
+            if local_config.exists() {
+                local_config
+            } else {
+                let home_dir = std::env::var("HOME")
+                    .or_else(|_| std::env::var("USERPROFILE"))?;
+                PathBuf::from(home_dir).join(".mpp-near").join("config.toml")
+            }
+        };
+
+        if !config_path.exists() {
+            return Ok(None);
+        }
+
+        let contents = fs::read_to_string(&config_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read config file {}: {}", config_path.display(), e))?;
+
+        let config: Config = toml::from_str(&contents)
+            .map_err(|e| anyhow::anyhow!("Failed to parse config file {}: {}", config_path.display(), e))?;
+
+        Ok(Some(config))
+    }
+}
+
 
 #[derive(Parser)]
 #[command(name = "mpp-near")]
@@ -62,7 +119,7 @@ enum Commands {
         recipient: String,
 
         /// Amount in NEAR (e.g., "1.5")
-        #[arg(short, long)]
+        #[arg(short = 'n', long)]
         amount: String,
 
         /// Token to send (near, usdc, usdt)
@@ -70,7 +127,7 @@ enum Commands {
         token: String,
 
         /// Memo to include with transaction
-        #[arg(short, long)]
+        #[arg(short = 'o', long)]
         memo: Option<String>,
     },
 
@@ -99,7 +156,7 @@ enum Commands {
     /// Start a payment server
     Server {
         /// Port to listen on
-        #[arg(short, long, default_value = "3000")]
+        #[arg(long, default_value = "3000")]
         port: u16,
 
         /// Recipient account for payments
@@ -117,7 +174,7 @@ enum Commands {
     /// Create a payment check (intents only)
     CreateCheck {
         /// Amount in token units
-        #[arg(short, long)]
+        #[arg(short = 'n', long)]
         amount: String,
 
         /// Token to use (near, usdc, usdt)
@@ -125,7 +182,7 @@ enum Commands {
         token: String,
 
         /// Memo for the check
-        #[arg(short, long)]
+        #[arg(short = 'o', long)]
         memo: Option<String>,
 
         /// Expiry time in seconds
@@ -140,7 +197,7 @@ enum Commands {
         check_key: String,
 
         /// Amount to claim (optional, claims all if not specified)
-        #[arg(short, long)]
+        #[arg(short = 'n', long)]
         amount: Option<String>,
     },
 
@@ -155,7 +212,7 @@ enum Commands {
         to: String,
 
         /// Amount to swap
-        #[arg(short, long)]
+        #[arg(short = 'n', long)]
         amount: String,
     },
 
@@ -165,7 +222,55 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+
+    // Load config file
+    let config = Config::load(cli.config.as_deref())?;
+
+    // Merge config file values with CLI args (CLI args take precedence)
+    if let Some(cfg) = config {
+        // Only use config values if CLI args weren't provided
+        if cli.method == "intents" && cli.api_key.is_none() {
+            if let Some(intents_cfg) = &cfg.intents {
+                if let Some(key) = &intents_cfg.api_key {
+                    if !key.is_empty() {
+                        cli.api_key = Some(key.clone());
+                    }
+                }
+            }
+        }
+
+        if cli.account.is_none() {
+            if let Some(standard_cfg) = &cfg.standard {
+                if let Some(account) = &standard_cfg.account {
+                    cli.account = Some(account.clone());
+                }
+            }
+        }
+
+        if cli.private_key.is_none() {
+            if let Some(standard_cfg) = &cfg.standard {
+                if let Some(key) = &standard_cfg.private_key {
+                    cli.private_key = Some(key.clone());
+                }
+            }
+        }
+
+        if cli.rpc_url.is_none() {
+            if let Some(standard_cfg) = &cfg.standard {
+                if let Some(url) = &standard_cfg.rpc_url {
+                    cli.rpc_url = Some(url.clone());
+                }
+            }
+        }
+
+        // Use method from config if not explicitly set to default
+        if cli.method == "intents" {
+            if let Some(method) = cfg.method {
+                cli.method = method;
+            }
+        }
+    }
 
     // Initialize logging
     if cli.verbose {
