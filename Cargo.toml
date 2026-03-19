@@ -55,6 +55,7 @@ toml = "0.8"
 directories = "5.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 colored = "2.1"
+urlencoding = "2.1"
 
 [dev-dependencies]
 tokio-test = "0.4"

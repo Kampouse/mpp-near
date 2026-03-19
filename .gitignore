@@ -9,3 +9,7 @@
 .env
 .env.*
 !.env.example
+
+# MPP-NEAR config files (contains API keys)
+.mpp-config
+.mpp-near/

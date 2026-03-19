@@ -1,38 +1,105 @@
-# mpp-near - NEAR Payment Provider for MPP
+---
+name: mpp-near
+description: NEAR payment CLI for Machine Payments Protocol (MPP). Send gasless payments via NEAR Intents, create payment checks for agent-to-agent payments, swap tokens across 20+ chains, and accept MPP payments. Use when an agent needs to handle NEAR blockchain payments - transfers, swaps, payment checks, or running a payment server.
+metadata:
+  api:
+    base_url: https://api.outlayer.fastnear.com
+    version: v1
+    auth: Bearer token (wk_...)
+  binaries:
+    cli: mpp-near
+    install: cargo install mpp-near --features client,intents
+---
 
-NEAR payment implementation for Machine Payments Protocol (MPP). Enables HTTP 402 payments with NEAR blockchain - gasless via NEAR Intents or standard on-chain transactions.
+# MPP-NEAR CLI
 
-## What This Does
+NEAR payment CLI for Machine Payments Protocol. Enables gasless payments via NEAR Intents (OutLayer custody wallet), agent-to-agent payment checks, cross-chain token swaps, and HTTP 402 payment handling.
 
-- **HTTP 402 payments** - Pay for API calls with NEAR/USDC/USDT
-- **Gasless payments** - Use NEAR Intents (no NEAR needed for gas)
-- **Standard payments** - Direct on-chain transactions
-- **Agent-to-agent payments** - Payment checks for AI agents
-- **Cross-chain swaps** - 20+ chains supported (Intents)
+## When to Use This Skill
 
-## Installation
-
-### As CLI Tool
-
-```bash
-cd ~/.openclaw/workspace/mpp-near
-cargo install --path .
-
-# Now available globally
-mpp-near --help
-```
-
-### As Library
-
-```toml
-# In your Cargo.toml
-[dependencies]
-mpp-near = { git = "https://github.com/Kampouse/mpp-near", features = ["intents"] }
-```
+| You need... | Action |
+|-------------|--------|
+| A crypto wallet for your agent | Use `mpp-near register` to create custody wallet |
+| Send NEAR/USDC/USDT payments | Use `mpp-near pay` --recipient, --amount, --token |
+| Gasless payments (no gas tokens) | Use Intents provider (default) - solver pays gas |
+| Agent-to-agent payments | Use `mpp-near create-check` + share check_key |
+| Receive payment from another agent | Use `mpp-near claim-check` --check_key |
+| Swap tokens (20+ chains) | Use `mpp-near swap` --from, --to, --amount |
+| Accept MPP payments for APIs | Use `mpp-near server` to start payment server |
+| Check wallet balance | Use `mpp-near balance` |
+| Fund your wallet | Use `mpp-near fund-link` to generate funding URL |
+| Configure wallet policies | Use `mpp-near handoff` to get management URL |
 
 ## Quick Start
 
-### 1. Configure
+### 1. Register Wallet (One-Time)
+
+```bash
+mpp-near register
+```
+
+**Response:**
+```
+✓ Wallet registered successfully!
+
+  Wallet ID:     0a991095-aef4-476c-806a-5ea4a51650ab
+  Account ID:    efa660437daaaae0e1fba740e2ebe5654613699ddb20bdc086e65025dca75129
+
+  API Key:       wk_008272006f007bd9917b67cf429e11436e888c2575caae666ef2ce1586dfdf9d
+ℹ IMPORTANT: Save your API key securely - it's shown only once!
+
+Next steps:
+  1. Save your API key: export MPP_NEAR_API_KEY=wk_...
+  2. Fund your wallet: mpp-near fund-link --amount 0.1 --token near
+  3. Check balance: mpp-near balance --api-key wk_...
+```
+
+### 2. Fund Wallet
+
+```bash
+# Fund with NEAR (for gas operations)
+mpp-near fund-link --amount 0.1 --token near
+
+# Fund with USDC to Intents balance (for gasless swaps)
+mpp-near fund-link --amount 10 --token usdc --intents
+```
+
+**Auto-opens browser** to complete funding transaction.
+
+### 3. Check Balance
+
+```bash
+mpp-near balance --api-key wk_...
+```
+
+**Response:**
+```
+✓ Balance retrieved
+  Account: 5c571cf253c3edb672df980cc56078f2c455b972cc01ac34af51e95967ba6edb
+  Balance: 0.100000 NEAR
+  USDC:    10.000000
+```
+
+### 4. Send Payment (Gasless!)
+
+```bash
+mpp-near pay --recipient merchant.near --amount 0.001 --token near
+mpp-near pay --recipient merchant.near --amount 1 --token usdc --memo "Payment for services"
+```
+
+## Configuration
+
+### API Key Authentication
+
+```bash
+# Set API key (recommended)
+export MPP_NEAR_API_KEY=wk_...
+
+# Or pass with each command
+mpp-near balance --api-key wk_...
+```
+
+### Config File
 
 Create `~/.mpp-near/config.toml`:
 
@@ -40,474 +107,233 @@ Create `~/.mpp-near/config.toml`:
 method = "intents"
 
 [intents]
-api_key = "wk_..."  # Get from https://outlayer.fastnear.com
-
-# Optional: Standard provider
-[standard]
-account = "kampouse.near"
-private_key = "ed25519:..."
-rpc_url = "https://rpc.mainnet.near.org"
-```
-
-### 2. Send Payment
-
-```bash
-# Gasless payment (Intents)
-mpp-near pay --recipient merchant.near --amount 1
-
-# Standard payment (requires gas)
-mpp-near pay \
-  --recipient merchant.near \
-  --amount 1 \
-  --method standard \
-  --account kampouse.near \
-  --private-key ed25519:...
+api_key = "wk_..."
 ```
 
 ## Commands
 
-### `pay` - Send Payment
-
-Send NEAR or tokens to a recipient.
+### Register Wallet
 
 ```bash
-# Send 1 NEAR (gasless)
-mpp-near pay --recipient merchant.near --amount 1
-
-# Send 10 USDC (gasless)
-mpp-near pay --recipient merchant.near --amount 10 --token usdc
-
-# Send with memo
-mpp-near pay --recipient merchant.near --amount 1 --memo "Invoice #123"
-
-# Standard payment (requires NEAR for gas)
-mpp-near pay \
-  --recipient merchant.near \
-  --amount 1 \
-  --method standard \
-  --account kampouse.near \
-  --private-key ed25519:5Kd3...
+mpp-near register
 ```
 
-**Options:**
-- `--recipient` - Account ID to receive payment (required)
-- `--amount` - Amount in NEAR (e.g., "1.5") (required)
-- `--token` - Token to send: near, usdc, usdt (default: near)
-- `--memo` - Optional memo
-- `--method` - Payment method: standard or intents (default: intents)
-- `--api-key` - OutLayer API key for intents
-- `--account` - NEAR account for standard
-- `--private-key` - Private key for standard
+**Creates** a new OutLayer custody wallet.
 
-### `balance` - Check Balance
-
-Check account balance.
+### Generate Funding Link
 
 ```bash
-# Intents wallet balance
-mpp-near balance --api-key wk_...
-
-# Standard account balance
-mpp-near balance --account kampouse.near --method standard
+mpp-near fund-link --amount <AMOUNT> --token <TOKEN> [--intents] [--memo <TEXT>]
 ```
 
-### `tokens` - List Available Tokens
+**Generates** a browser-based funding URL.
 
-List tokens available for Intents (20+ chains).
+**Examples:**
+```bash
+# Fund NEAR for gas
+mpp-near fund-link --amount 0.1 --token near
+
+# Fund USDC to Intents (for swaps/checks)
+mpp-near fund-link --amount 10 --token usdc --intents --memo "Gasless operations"
+```
+
+### Check Balance
 
 ```bash
-mpp-near tokens --api-key wk_...
+mpp-near balance [--api-key wk_...]
 ```
 
-Output:
-```
-✓ Found 156 tokens
+**Shows** NEAR and USDC balances.
 
-NEAR    - NEAR Protocol (near)
-ETH     - Ethereum (ethereum)
-USDC    - USD Coin (ethereum)
-BTC     - Bitcoin (bitcoin)
-SOL     - Solana (solana)
-...
-```
-
-### `config` - Show Configuration
-
-Display current configuration.
+### Send Payment
 
 ```bash
-mpp-near config
+mpp-near pay --recipient <ACCOUNT> --amount <AMOUNT> --token <TOKEN> [--memo <TEXT>]
 ```
 
-## Payment Methods
+**Sends** gasless payment via NEAR Intents.
 
-### Intents (Gasless) - Recommended
+**Examples:**
+```bash
+# Send NEAR
+mpp-near pay --recipient merchant.near --amount 0.001 --memo "Payment for API call"
 
-**Pros:**
-- ✅ No gas required
-- ✅ Instant (solver pays gas)
-- ✅ Cross-chain swaps (20+ chains)
-- ✅ Agent-to-agent payment checks
+# Send USDC
+mpp-near pay --recipient merchant.near --amount 5 --token usdc --memo "Monthly subscription"
+```
 
-**Cons:**
-- ❌ Requires OutLayer API key
-- ❌ Custody wallet (not your keys)
-
-**When to use:**
-- No NEAR for gas
-- Want gasless operations
-- Need cross-chain swaps
-- Building AI agents
-
-**Get API key:** https://outlayer.fastnear.com
-
-### Standard (On-chain)
-
-**Pros:**
-- ✅ Works with any NEAR wallet
-- ✅ Direct on-chain transactions
-- ✅ Full control (your keys)
-
-**Cons:**
-- ❌ Requires NEAR for gas fees (~0.00005 NEAR/tx)
-- ❌ Slower (~1-2 seconds)
-
-**When to use:**
-- Have NEAR for gas
-- Want full control
-- Building decentralized apps
-
-## Use Cases
-
-### 1. Pay for API Access
+### Create Payment Check
 
 ```bash
-# Client pays for API call
-mpp-near pay \
-  --recipient api-provider.near \
-  --amount 0.1 \
-  --method intents \
-  --api-key $OUTLAYER_API_KEY
+mpp-near create-check --amount <AMOUNT> --token <TOKEN> [--memo <TEXT>] [--expires-in <SECONDS>]
 ```
 
-### 2. Gasless Token Swap
+**Creates** a claimable payment check (agent-to-agent payment).
+
+**Examples:**
+```bash
+# Create 1 USDC check
+mpp-near create-check --amount 1 --token usdc --memo "AI service payment"
+
+# Create check with 1-hour expiry
+mpp-near create-check --amount 0.5 --token usdc --expires-in 3600
+```
+
+**Response:**
+```
+✓ Payment check created
+
+  Check ID:  be291056-12c0-41f4-b4cc-5316c66a5dd1
+  Check Key: b72e42e49bc15cdde9b195c0849d9d776cbbde0c077dd0fce10791da518f29c2
+  Amount:    1 USDC
+  Memo:      AI service payment
+  Expires:   2026-03-20T19:59:16
+
+Share the check key with the recipient to claim.
+```
+
+### Claim Payment Check
 
 ```bash
-# Swap 1 NEAR to USDC (gasless)
-# (Would need to implement swap command)
+mpp-near claim-check --check-key <KEY> [--amount <AMOUNT>]
 ```
 
-### 3. Agent-to-Agent Payment
+**Claims** a payment check received from another agent.
+
+**Examples:**
+```bash
+# Claim full check
+mpp-near claim-check --check-key b72e42e49bc15cdde9b195c0849d9d776cbbde0c077dd0fce10791da518f29c2
+
+# Claim partial amount
+mpp-near claim-check --check-key b72e42e...c2 --amount 0.5
+```
+
+### Swap Tokens (Gasless)
 
 ```bash
-# Create payment check for another agent
-# (Would need to implement create-check command)
-
-# Agent claims the check
-# (Would need to implement claim-check command)
+mpp-near swap --from <TOKEN> --to <TOKEN> --amount <AMOUNT>
 ```
 
-### 4. Automated Payments
+**Swaps** tokens across 20+ chains via NEAR Intents (gasless).
+
+**Examples:**
+```bash
+# Swap USDC to NEAR
+mpp-near swap --from usdc --to near --amount 1
+
+# Swap NEAR to USDC
+mpp-near swap --from near --to usdc --amount 0.1
+
+# Swap USDT to wNEAR
+mpp-near swap --from usdt --to near --amount 10
+```
+
+**Response:**
+```
+✓ Swap completed (gasless)!
+  Request ID: ec9ff45d-55b8-4ebb-ae03-fca23fc11602
+  Amount out: 0.372251 NEAR
+  Intent:     HBFd9rds4sGECRabQdoLF7sShEdEBuMLpmRGq23znbfA
+```
+
+### List Available Tokens
 
 ```bash
-#!/bin/bash
-# Cron job to pay for services daily
-
-API_KEY="wk_..."
-RECIPIENT="service-provider.near"
-
-mpp-near pay \
-  --recipient $RECIPIENT \
-  --amount 0.5 \
-  --method intents \
-  --api-key $API_KEY
+mpp-near tokens
 ```
 
-## Integration Examples
+**Lists** 151+ tokens available for swaps.
 
-### Rust Library
-
-```rust
-use mpp_near::client::{IntentsProvider, NearProvider};
-use mpp_near::types::{AccountId, NearAmount};
-
-// Gasless payments
-let provider = IntentsProvider::new("wk_...".to_string());
-let recipient = AccountId::new("merchant.near")?;
-let amount = NearAmount::from_near(1);
-
-let tx_hash = provider.transfer(&recipient, amount).await?;
-println!("Payment sent: {}", tx_hash);
-
-// Standard payments
-let provider = NearProvider::new(
-    "kampouse.near".parse()?,
-    "ed25519:...".to_string(),
-    "https://rpc.mainnet.near.org",
-)?;
-let tx_hash = provider.transfer(&recipient, amount).await?;
-```
-
-### HTTP Client (Middleware)
-
-```rust
-use mpp_near::client::{IntentsProvider, PaymentMiddleware};
-use reqwest_middleware::ClientBuilder;
-
-let provider = IntentsProvider::new("wk_...".to_string());
-
-let client = ClientBuilder::new(reqwest::Client::new())
-    .with(PaymentMiddleware::new(provider))
-    .build();
-
-// Automatically handles HTTP 402 responses
-let resp = client.get("https://api.example.com/paid-endpoint")
-    .send()
-    .await?;
-```
-
-### MCP Tool (AI Agents)
-
-```rust
-// For MCP tools that require payment
-// Use _meta.org.paymentauth/credential field
-
-{
-  "method": "tools/call",
-  "params": {
-    "name": "expensive-api",
-    "_meta": {
-      "org.paymentauth/credential": {
-        "challenge": {...},
-        "payload": {
-          "tx_hash": "...",
-          "signature": "..."
-        }
-      }
-    }
-  }
-}
-```
-
-## Configuration
-
-### Config File Location
-
-Default: `~/.mpp-near/config.toml`
-
-Custom: `mpp-near --config /path/to/config.toml ...`
-
-### Environment Variables
+### Show Wallet Management URL
 
 ```bash
-# Intents API key
-export OUTLAYER_API_KEY=wk_...
-
-# NEAR account (standard)
-export NEAR_ACCOUNT_ID=kampouse.near
-export NEAR_PRIVATE_KEY=ed25519:...
-
-# Quiet mode (suppress info messages)
-export MPP_NEAR_QUIET=1
+mpp-near handoff
 ```
 
-### Full Config Example
+**Shows** the OutLayer dashboard URL.
 
-```toml
-# Default payment method
-method = "intents"
+## Gas Model
 
-# Standard provider configuration
-[standard]
-account = "kampouse.near"
-private_key = "ed25519:5Kd3NBUAdq5WJn5h1ZaF5GKK8cFQRkXdE6..."
-rpc_url = "https://rpc.mainnet.near.org"
+| Operation | Gas Required | Who Pays |
+|-----------|--------------|----------|
+| `pay` (intents) | **No** | Solver relay |
+| `create-check` | **No** | Solver relay |
+| `claim-check` | **No** | Solver relay |
+| `swap` | **No** | Solver relay |
+| `balance` | No | N/A (read-only) |
 
-# Intents provider configuration
-[intents]
-api_key = "wk_your_api_key_here"
-api_url = "https://api.outlayer.fastnear.com"
+**All operations are gasless by default!** 🎉
+
+## Best Practices
+
+1. **Use payment checks** for agent-to-agent payments (no storage needed)
+2. **Set expiry on checks** - 86400s (24h) default
+3. **Fund with --intents** for gasless operations
+4. **Never share API keys** - Treat like private keys
+
+## Examples
+
+### Complete Payment Flow
+
+```bash
+# 1. Register wallet
+mpp-near register
+
+# 2. Fund wallet
+mpp-near fund-link --amount 0.1 --token near
+mpp-near fund-link --amount 10 --token usdc --intents
+
+# 3. Check balance
+mpp-near balance
+
+# 4. Send payment (gasless!)
+mpp-near pay --recipient merchant.near --amount 0.001
+
+# 5. Create payment check
+mpp-near create-check --amount 1 --token usdc --memo "Service payment"
+
+# 6. Swap tokens
+mpp-near swap --from usdc --to near --amount 0.5
 ```
 
-## API Reference
+### Agent-to-Agent Payment
 
-### IntentsProvider (Gasless)
+```bash
+# Agent A (sender)
+mpp-near create-check --amount 5 --token usdc --memo "Data processing"
+# → Share check_key with Agent B
 
-```rust
-impl IntentsProvider {
-    // Create provider
-    pub fn new(api_key: String) -> Self;
-    
-    // Get wallet account ID
-    pub async fn get_account_id(&self) -> Result<String>;
-    
-    // Check NEAR balance
-    pub async fn check_balance(&self) -> Result<NearAmount>;
-    
-    // Check token balance (intents)
-    pub async fn check_intents_balance(&self, token: &str) -> Result<NearAmount>;
-    
-    // Transfer NEAR (gasless)
-    pub async fn transfer(&self, recipient: &AccountId, amount: NearAmount) -> Result<TransactionHash>;
-    
-    // Transfer token (gasless)
-    pub async fn transfer_token(&self, token: &str, recipient: &AccountId, amount: NearAmount) -> Result<TransactionHash>;
-    
-    // Swap tokens (gasless)
-    pub async fn swap(&self, token_in: &str, token_out: &str, amount: NearAmount, min_out: Option<NearAmount>) -> Result<SwapResult>;
-    
-    // Create payment check (agent-to-agent)
-    pub async fn create_payment_check(&self, token: &str, amount: NearAmount, memo: Option<&str>, expires_in: Option<u64>) -> Result<PaymentCheck>;
-    
-    // Claim payment check
-    pub async fn claim_payment_check(&self, check_key: &str, amount: Option<NearAmount>) -> Result<NearAmount>;
-    
-    // List available tokens
-    pub async fn list_tokens(&self) -> Result<Vec<TokenInfo>>;
-}
+# Agent B (recipient)
+mpp-near claim-check --check-key <KEY_FROM_AGENT_A>
 ```
-
-### NearProvider (Standard)
-
-```rust
-impl NearProvider {
-    // Create provider
-    pub fn new(account_id: AccountId, private_key: String, rpc_url: &str) -> Result<Self>;
-    
-    // Check account balance
-    pub async fn check_balance(&self) -> Result<NearAmount>;
-    
-    // Transfer NEAR
-    pub async fn transfer(&self, recipient: &AccountId, amount: NearAmount) -> Result<TransactionHash>;
-    
-    // Transfer NEP-141 token
-    pub async fn transfer_token(&self, token_contract: &AccountId, recipient: &AccountId, amount: NearAmount) -> Result<TransactionHash>;
-}
-```
-
-## Supported Tokens
-
-### NEAR
-- NEAR (native)
-
-### NEP-141 Tokens
-- USDC: `17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1`
-- USDT: `usdt.tether-token.near`
-
-### Cross-Chain (Intents only)
-- Ethereum, Bitcoin, Solana, Arbitrum, Base, Polygon, Optimism, Avalanche, BSC, TON, Aptos, Sui, and more
-
-Use `mpp-near tokens --api-key wk_...` to see full list.
-
-## Error Handling
-
-### Common Errors
-
-**"API key required"**
-- Set `--api-key` or configure in config file
-- Get key from https://outlayer.fastnear.com
-
-**"Account required"**
-- Set `--account` for standard method
-- Or use `--method intents`
-
-**"Private key required"**
-- Set `--private-key` for standard method
-- Format: `ed25519:...`
-
-**"Insufficient balance"**
-- Check balance with `mpp-near balance`
-- For standard: need NEAR for gas
-- For intents: need tokens in custody wallet
-
-**"Invalid recipient"**
-- Must be valid NEAR account ID
-- Format: `account.near` or `sub.account.near`
 
 ## Troubleshooting
 
-### Verbose Output
+### Storage Registration Required
 
+**Solution:** Use payment checks instead (no storage needed):
 ```bash
-mpp-near pay --recipient test.near --amount 1 --verbose
+mpp-near create-check --amount 1 --token usdc --memo "Payment"
 ```
 
-### Test Configuration
+### Insufficient Balance
 
+**Solution:** Generate funding link:
 ```bash
-mpp-near config
+mpp-near fund-link --amount 1 --token near
 ```
 
-### Check Balance First
+## References
 
-```bash
-# Always check balance before paying
-mpp-near balance --api-key wk_...
-```
+- **Repository:** https://github.com/kampouse/mpp-near
+- **OutLayer Dashboard:** https://outlayer.fastnear.com
+- **MPP Protocol:** https://mpp.dev
 
-## Security
+## Version
 
-### API Keys
-- Store securely (environment variables or config file)
-- Never commit to git
-- Rotate if compromised
-
-### Private Keys
-- **Standard method only** - Intents doesn't need your private key
-- Store securely
-- Never share or commit
-
-### Intents Custody
-- Keys stored in TEE (Trusted Execution Environment)
-- OutLayer manages security
-- Trade-off: gasless but not "your keys, your crypto"
-
-## Architecture
-
-```
-mpp-near
-├── src/
-│   ├── lib.rs           # Library entry
-│   ├── client/
-│   │   ├── provider.rs  # Standard NEAR payments
-│   │   ├── intents.rs   # Gasless Intents payments
-│   │   ├── middleware.rs # HTTP 402 handler
-│   │   └── signer.rs    # ED25519 signatures
-│   ├── server/
-│   │   ├── verifier.rs  # Payment verification
-│   │   └── extractor.rs # Axum extractors
-│   ├── types/
-│   │   └── mod.rs       # AccountId, NearAmount, etc.
-│   └── bin/
-│       └── mpp-near.rs  # CLI binary
-└── examples/
-    ├── near_client.rs   # Standard client example
-    ├── near_server.rs   # Payment server example
-    └── intents_client.rs # Gasless client example
-```
-
-## Protocol Compliance
-
-mpp-near implements:
-
-- **IETF MPP** - Machine Payments Protocol (paymentauth.org)
-- **HTTP 402** - Payment Required status code
-- **JSON-RPC transport** - For MCP/AI agents
-- **NEAR Intents** - Gasless payment protocol
-
-## Resources
-
-- **GitHub:** https://github.com/Kampouse/mpp-near
-- **MPP Spec:** https://paymentauth.org
-- **NEAR Intents:** https://outlayer.fastnear.com
-- **NEAR RPC:** https://rpc.mainnet.near.org
+Current version: 0.1.0
 
 ## License
 
 MIT OR Apache-2.0
-
-## Credits
-
-- Forked from [tempoxyz/mpp-rs](https://github.com/tempoxyz/mpp-rs)
-- NEAR Intents by OutLayer
-- MPP by Tempo Labs

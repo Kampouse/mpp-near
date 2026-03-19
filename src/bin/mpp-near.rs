@@ -131,11 +131,47 @@ enum Commands {
         memo: Option<String>,
     },
 
+    /// Register a new OutLayer custody wallet
+    Register,
+
     /// Check account balance
     Balance {
         /// Account to check (defaults to configured account)
         #[arg(short, long)]
         account: Option<String>,
+    },
+
+    /// Generate a funding link for the wallet
+    FundLink {
+        /// Amount to request
+        #[arg(short = 'n', long)]
+        amount: String,
+
+        /// Token to receive (near, usdc, usdt)
+        #[arg(short = 't', long, default_value = "near")]
+        token: String,
+
+        /// Optional message for the funder
+        #[arg(short = 'o', long)]
+        memo: Option<String>,
+
+        /// Deposit to intents balance (for gasless operations)
+        #[arg(long)]
+        intents: bool,
+    },
+
+    /// Show wallet management URL (handoff)
+    Handoff,
+
+    /// Register storage for an account (required before receiving tokens)
+    StorageDeposit {
+        /// Account ID to register storage for (defaults to self)
+        #[arg(short, long)]
+        account: Option<String>,
+
+        /// Token contract (default: near)
+        #[arg(long, default_value = "near")]
+        token: String,
     },
 
     /// Verify a transaction
@@ -284,12 +320,28 @@ async fn main() -> Result<()> {
     }
 
     match &cli.command {
+        Commands::Register => {
+            cmd_register().await?;
+        }
+
         Commands::Pay { recipient, amount, token, memo } => {
             cmd_pay(&cli, recipient, amount, token, memo.as_deref()).await?;
         }
 
         Commands::Balance { account } => {
             cmd_balance(&cli, account.as_deref()).await?;
+        }
+
+        Commands::FundLink { amount, token, memo, intents } => {
+            cmd_fund_link(&cli, amount, token, memo.as_deref(), *intents).await?;
+        }
+
+        Commands::Handoff => {
+            cmd_handoff(&cli).await?;
+        }
+
+        Commands::StorageDeposit { account, token } => {
+            cmd_storage_deposit(&cli, account.as_deref(), token).await?;
         }
 
         Commands::Verify { tx_hash, expected_amount, expected_recipient } => {
@@ -339,26 +391,65 @@ async fn cmd_pay(cli: &Cli, recipient: &str, amount: &str, token: &str, memo: Op
 
                 let provider = IntentsProvider::new(api_key.clone());
 
-                let tx_hash = match token {
-                    "near" => provider.transfer(&recipient, near_amount).await?,
+                let result = match token {
+                    "near" => provider.transfer(&recipient, near_amount).await,
                     "usdc" => provider.transfer_token(
                         "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
                         &recipient,
                         near_amount,
-                    ).await?,
+                    ).await,
                     "usdt" => provider.transfer_token(
                         "usdt.tether-token.near",
                         &recipient,
                         near_amount,
-                    ).await?,
+                    ).await,
                     _ => return Err(anyhow::anyhow!("Unsupported token: {}", token)),
                 };
 
-                print_success("Payment sent (gasless)!");
-                println!("  Transaction: {}", tx_hash);
-                println!("  Recipient:   {}", recipient);
-                println!("  Amount:      {} {}", near_amount, token);
-                println!("  Gas cost:    0 (paid by solver)");
+                match result {
+                    Ok(tx_hash) => {
+                        print_success("Payment sent (gasless)!");
+                        println!("  Transaction: {}", tx_hash);
+                        println!("  Recipient:   {}", recipient);
+                        println!("  Amount:      {} {}", near_amount, token);
+                        println!("  Gas cost:    0 (paid by solver)");
+                    }
+                    Err(e) => {
+                        // Check if it's a storage error and provide helpful suggestion
+                        let error_msg = e.to_string();
+                        if error_msg.contains("has no storage") {
+                            print_info("ℹ Storage registration required");
+                            println!();
+                            println!("The recipient needs storage registered on the token contract.");
+                            println!();
+                            println!("Solutions:");
+                            println!("  1. Use a funding link (auto-registers storage):");
+                            println!("     mpp-near fund-link --recipient {} --amount {} --token {}",
+                                     recipient.as_str().replace('.', "\\."),
+                                     amount,
+                                     token);
+                            println!();
+                            println!("  2. Ask recipient to register storage:");
+                            println!("     https://outlayer.fastnear.com/wallet/fund?to={}&amount=0.001&token={}",
+                                     recipient.as_str(),
+                                     get_token_id(token));
+                            println!();
+                            println!("  3. Try storage-deposit command (may be blocked by policy):");
+                            println!("     mpp-near storage-deposit --account {} --token {}",
+                                     recipient.as_str().replace('.', "\\."),
+                                     token);
+                            return Err(e.into());
+                        } else if error_msg.contains("insufficient_balance") {
+                            print_info("ℹ Insufficient balance");
+                            println!();
+                            println!("Your wallet needs more tokens. Generate a funding link:");
+                            println!("  mpp-near fund-link --amount 1 --token {}", token);
+                            return Err(e.into());
+                        } else {
+                            return Err(e.into());
+                        }
+                    }
+                }
             }
 
             #[cfg(not(feature = "intents"))]
@@ -413,6 +504,120 @@ async fn cmd_pay(cli: &Cli, recipient: &str, amount: &str, token: &str, memo: Op
     if let Some(m) = memo {
         print_info(&format!("Memo: {}", m));
     }
+
+    Ok(())
+}
+
+async fn cmd_register() -> Result<()> {
+    print_info("Registering new OutLayer custody wallet...");
+
+    let response = reqwest::Client::new()
+        .post("https://api.outlayer.fastnear.com/register")
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!("Registration failed: HTTP {}", response.status()));
+    }
+
+    let data: serde_json::Value = response.json().await?;
+
+    let api_key = data["api_key"].as_str().ok_or_else(|| anyhow::anyhow!("No api_key in response"))?;
+    let wallet_id = data["wallet_id"].as_str().ok_or_else(|| anyhow::anyhow!("No wallet_id in response"))?;
+    let near_account_id = data["near_account_id"].as_str().ok_or_else(|| anyhow::anyhow!("No near_account_id in response"))?;
+    let handoff_url = data["handoff_url"].as_str().ok_or_else(|| anyhow::anyhow!("No handoff_url in response"))?;
+
+    print_success("Wallet registered successfully!");
+    println!();
+    println!("  Wallet ID:     {}", wallet_id);
+    println!("  Account ID:    {}", near_account_id);
+    println!();
+    println!("  API Key:       {}", api_key);
+    print_info("IMPORTANT: Save your API key securely - it's shown only once!");
+    println!();
+    println!("  Management:    {}", handoff_url);
+    println!();
+    println!("Next steps:");
+    println!("  1. Save your API key: export MPP_NEAR_API_KEY={}", api_key);
+    println!("  2. Fund your wallet:");
+    println!("     mpp-near fund-link --amount 0.1 --token near");
+    println!("  3. Check balance:");
+    println!("     mpp-near balance --api-key {}", api_key);
+
+    Ok(())
+}
+
+async fn cmd_fund_link(cli: &Cli, amount: &str, token: &str, memo: Option<&str>, intents: bool) -> Result<()> {
+    let api_key = cli.api_key.as_ref()
+        .ok_or_else(|| anyhow::anyhow!("--api-key required. Get one with: mpp-near register"))?;
+
+    let provider = IntentsProvider::new(api_key.clone());
+    let account_id = provider.get_account_id().await?;
+
+    let token_id = get_token_id(token);
+    let memo_encoded = memo.map(|m| urlencoding::encode(m).to_string()).unwrap_or_default();
+
+    let mut url = format!(
+        "https://outlayer.fastnear.com/wallet/fund?to={}&amount={}&token={}",
+        account_id, amount, token_id
+    );
+
+    if !memo_encoded.is_empty() {
+        url.push_str(&format!("&msg={}", memo_encoded));
+    }
+
+    if intents {
+        url.push_str("&dest=intents");
+    }
+
+    print_success("Funding link generated:");
+    println!();
+    println!("  {}", url);
+    println!();
+
+    if intents {
+        print_info("Tokens will be deposited to Intents balance (gasless operations)");
+    } else {
+        print_info("Tokens will be deposited to wallet balance (for gas operations)");
+    }
+
+    println!();
+    println!("Open this link in your browser to fund the wallet.");
+    println!("After funding, run: mpp-near balance");
+
+    // Try to open the link automatically
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg(&url)
+            .spawn();
+        print_info("Opening funding link in browser...");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn();
+        print_info("Opening funding link in browser...");
+    }
+
+    Ok(())
+}
+
+async fn cmd_handoff(cli: &Cli) -> Result<()> {
+    let api_key = cli.api_key.as_ref()
+        .ok_or_else(|| anyhow::anyhow!("--api-key required"))?;
+
+    print_success("Wallet Management URL:");
+    println!();
+    println!("  https://outlayer.fastnear.com/wallet?key={}", api_key);
+    println!();
+    println!("Use this link to:");
+    println!("  - Configure spending policies");
+    println!("  - View transaction history");
+    println!("  - Recover your API key if lost");
+    println!("  - Set up multi-sig approval");
 
     Ok(())
 }
@@ -494,6 +699,41 @@ async fn cmd_verify(cli: &Cli, tx_hash: &str, expected_amount: Option<&str>, exp
     Ok(())
 }
 
+async fn cmd_storage_deposit(cli: &Cli, account: Option<&str>, token: &str) -> Result<()> {
+    #[cfg(feature = "intents")]
+    {
+        let api_key = cli.api_key.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("--api-key required"))?;
+
+        print_info(&format!("Registering storage for token '{}'...", token));
+
+        let provider = IntentsProvider::new(api_key.clone());
+
+        match account {
+            Some(acc) => {
+                print_info(&format!("Registering storage for account: {}", acc));
+            }
+            None => {
+                let account_id = provider.get_account_id().await?;
+                print_info(&format!("Registering storage for own account: {}", account_id));
+            }
+        }
+
+        let already_registered = provider.storage_deposit(token, account).await?;
+
+        if already_registered {
+            print_success("Storage already registered");
+        } else {
+            print_success("Storage registered successfully");
+        }
+    }
+
+    #[cfg(not(feature = "intents"))]
+    return Err(anyhow::anyhow!("Intents feature not enabled"));
+
+    Ok(())
+}
+
 async fn cmd_server(cli: &Cli, port: u16, recipient: &str, min_amount: &str) -> Result<()> {
     #[cfg(feature = "server")]
     {
@@ -563,10 +803,12 @@ async fn cmd_tokens(cli: &Cli) -> Result<()> {
 
         print_success(&format!("Found {} tokens", tokens.len()));
 
-        // Group by chain
+        // Group by chain (tokens can be on multiple chains)
         let mut by_chain: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
         for token in tokens {
-            by_chain.entry(token.chain.clone()).or_default().push(token);
+            for chain in &token.chains {
+                by_chain.entry(chain.clone()).or_default().push(token.clone());
+            }
         }
 
         for (chain, mut chain_tokens) in by_chain {
@@ -575,7 +817,7 @@ async fn cmd_tokens(cli: &Cli) -> Result<()> {
             chain_tokens.sort_by(|a, b| a.symbol.cmp(&b.symbol));
 
             for token in chain_tokens.iter().take(10) {
-                println!("  {:6} - {} ({} decimals)", token.symbol, token.name, token.decimals);
+                println!("  {:6} - {} ({} decimals)", token.symbol, token.id, token.decimals);
             }
 
             if chain_tokens.len() > 10 {
@@ -668,12 +910,12 @@ async fn cmd_swap(cli: &Cli, from: &str, to: &str, amount: &str) -> Result<()> {
 
         let provider = IntentsProvider::new(api_key.clone());
 
-        let from_token = get_token_id(from);
-        let to_token = get_token_id(to);
+        let from_token = get_swap_token_id(from);
+        let to_token = get_swap_token_id(to);
 
         let result = provider.swap(
-            from_token,
-            to_token,
+            &from_token,
+            &to_token,
             near_amount,
             None,
         ).await?;
@@ -702,20 +944,33 @@ fn cmd_config(cli: &Cli) -> Result<()> {
     println!("API Key:    {:?}", cli.api_key.as_ref().map(|_| "(set)"));
     println!();
     println!("Commands:");
-    println!("  pay          - Send a payment");
-    println!("  balance      - Check account balance");
-    println!("  verify       - Verify a transaction");
-    println!("  server       - Start payment server");
-    println!("  tokens       - List available tokens");
-    println!("  create-check - Create payment check");
-    println!("  claim-check  - Claim payment check");
-    println!("  swap         - Swap tokens");
-    println!("  config       - Show this configuration");
+    println!("  register        - Register a new OutLayer custody wallet");
+    println!("  fund-link       - Generate a funding link for your wallet");
+    println!("  handoff         - Show wallet management URL");
+    println!("  pay             - Send a payment");
+    println!("  balance         - Check account balance");
+    println!("  storage-deposit - Register storage for token receipt");
+    println!("  verify          - Verify a transaction");
+    println!("  server          - Start payment server");
+    println!("  tokens          - List available tokens");
+    println!("  create-check    - Create payment check");
+    println!("  claim-check     - Claim payment check");
+    println!("  swap            - Swap tokens");
+    println!("  config          - Show this configuration");
+    println!();
+    println!("Quick start:");
+    println!("  1. Register wallet:");
+    println!("     mpp-near register");
+    println!("  2. Generate funding link:");
+    println!("     mpp-near fund-link --amount 0.1 --token near");
+    println!("  3. Check balance:");
+    println!("     mpp-near balance --api-key wk_...");
     println!();
     println!("Example usage:");
     println!("  mpp-near pay --recipient merchant.near --amount 1");
     println!("  mpp-near pay --recipient merchant.near --amount 10 --token usdc");
     println!("  mpp-near balance");
+    println!("  mpp-near storage-deposit --account merchant.near");
     println!("  mpp-near tokens");
     println!("  mpp-near swap --from near --to usdc --amount 1");
     println!("  mpp-near create-check --amount 10 --token usdc");
@@ -750,6 +1005,17 @@ fn get_token_id(token: &str) -> &str {
         "usdc" => "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
         "usdt" => "usdt.tether-token.near",
         _ => token,
+    }
+}
+
+/// Get swap token ID in defuse asset format (nep141: prefix required)
+fn get_swap_token_id(token: &str) -> String {
+    match token {
+        "near" | "wnear" => "nep141:wrap.near".to_string(),
+        "usdc" => "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1".to_string(),
+        "usdt" => "nep141:usdt.tether-token.near".to_string(),
+        _ if token.starts_with("nep141:") => token.to_string(),
+        _ => format!("nep141:{}", token),
     }
 }
 

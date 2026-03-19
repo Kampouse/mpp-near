@@ -159,14 +159,14 @@ impl IntentsProvider {
     /// Gasless transfer via NEAR Intents
     pub async fn transfer(&self, recipient: &AccountId, amount: NearAmount) -> Result<TransactionHash> {
         info!("Gasless transfer of {} to {}", amount, recipient);
-        
+
         let request = WithdrawRequest {
             to: recipient.as_str().to_string(),
             amount: amount.0.to_string(),
             token: "near".to_string(),
             chain: self.config.default_chain.clone(),
         };
-        
+
         let response = self.client
             .post(&format!("{}/wallet/v1/intents/withdraw", self.config.api_url))
             .header("Authorization", format!("Bearer {}", self.config.api_key))
@@ -175,11 +175,21 @@ impl IntentsProvider {
             .await?
             .json::<WithdrawResponse>()
             .await?;
-        
-        match response.status.as_str() {
-            "success" => {
-                info!("Transfer successful: {}", response.intent_hash);
-                TransactionHash::new(format!("0x{}", response.intent_hash))
+
+        // Check for error response
+        if let Some(error) = response.error {
+            return Err(Error::TransactionFailed(format!(
+                "Transfer failed: {} - {}",
+                error,
+                response.message.unwrap_or_default()
+            )));
+        }
+
+        match response.status.as_deref() {
+            Some("success") => {
+                let hash = response.intent_hash.unwrap_or_default();
+                info!("Transfer successful: {}", hash);
+                TransactionHash::new(format!("0x{}", hash))
             }
             _ => Err(Error::TransactionFailed(format!(
                 "Transfer failed: {:?}",
@@ -196,14 +206,14 @@ impl IntentsProvider {
         amount: NearAmount,
     ) -> Result<TransactionHash> {
         info!("Gasless token transfer of {} to {}", amount, recipient);
-        
+
         let request = WithdrawRequest {
             to: recipient.as_str().to_string(),
             amount: amount.0.to_string(),
             token: token.to_string(),
             chain: self.config.default_chain.clone(),
         };
-        
+
         let response = self.client
             .post(&format!("{}/wallet/v1/intents/withdraw", self.config.api_url))
             .header("Authorization", format!("Bearer {}", self.config.api_key))
@@ -212,11 +222,21 @@ impl IntentsProvider {
             .await?
             .json::<WithdrawResponse>()
             .await?;
-        
-        match response.status.as_str() {
-            "success" => {
-                info!("Token transfer successful: {}", response.intent_hash);
-                TransactionHash::new(format!("0x{}", response.intent_hash))
+
+        // Check for error response
+        if let Some(error) = response.error {
+            return Err(Error::TransactionFailed(format!(
+                "Token transfer failed: {} - {}",
+                error,
+                response.message.unwrap_or_default()
+            )));
+        }
+
+        match response.status.as_deref() {
+            Some("success") => {
+                let hash = response.intent_hash.unwrap_or_default();
+                info!("Token transfer successful: {}", hash);
+                TransactionHash::new(format!("0x{}", hash))
             }
             _ => Err(Error::TransactionFailed(format!(
                 "Token transfer failed: {:?}",
@@ -292,7 +312,7 @@ impl IntentsProvider {
             memo: memo.map(|s| s.to_string()),
             expires_in,
         };
-        
+
         let response = self.client
             .post(&format!("{}/wallet/v1/payment-check/create", self.config.api_url))
             .header("Authorization", format!("Bearer {}", self.config.api_key))
@@ -301,14 +321,32 @@ impl IntentsProvider {
             .await?
             .json::<PaymentCheckResponse>()
             .await?;
-        
-        info!("Created payment check: {}", response.check_id);
-        
+
+        // Check for error response
+        if let Some(error) = response.error {
+            return Err(Error::TransactionFailed(format!(
+                "Payment check failed: {} - {}",
+                error,
+                response.message.unwrap_or_default()
+            )));
+        }
+
+        let check_id = response.check_id.ok_or_else(|| anyhow::anyhow!("Missing check_id in response"))
+            .map_err(|e| Error::TransactionFailed(e.to_string()))?;
+        let check_key = response.check_key.ok_or_else(|| anyhow::anyhow!("Missing check_key in response"))
+            .map_err(|e| Error::TransactionFailed(e.to_string()))?;
+        let token = response.token.ok_or_else(|| anyhow::anyhow!("Missing token in response"))
+            .map_err(|e| Error::TransactionFailed(e.to_string()))?;
+        let amount = response.amount.ok_or_else(|| anyhow::anyhow!("Missing amount in response"))
+            .map_err(|e| Error::TransactionFailed(e.to_string()))?;
+
+        info!("Created payment check: {}", check_id);
+
         Ok(PaymentCheck {
-            check_id: response.check_id,
-            check_key: response.check_key,
-            token: response.token,
-            amount: NearAmount::from_yocto(response.amount.parse().unwrap_or(0)),
+            check_id,
+            check_key,
+            token,
+            amount: NearAmount::from_yocto(amount.parse().unwrap_or(0)),
             memo: response.memo,
             expires_at: response.expires_at,
         })
@@ -372,13 +410,24 @@ impl IntentsProvider {
             .await?
             .json::<SwapResponse>()
             .await?;
-        
-        match response.status.as_str() {
-            "success" => {
+
+        // Check for error response
+        if let Some(error) = response.error {
+            return Err(Error::TransactionFailed(format!(
+                "Swap failed: {} - {}",
+                error,
+                response.message.unwrap_or_default()
+            )));
+        }
+
+        match response.status.as_deref() {
+            Some("success") => {
+                let request_id = response.request_id.unwrap_or_default();
+                let amount_out = response.amount_out.unwrap_or_default();
                 info!("Swap successful: {} → {}", token_in, token_out);
                 Ok(SwapResult {
-                    request_id: response.request_id,
-                    amount_out: NearAmount::from_yocto(response.amount_out.unwrap_or_default().parse().unwrap_or(0)),
+                    request_id,
+                    amount_out: NearAmount::from_yocto(amount_out.parse().unwrap_or(0)),
                     intent_hash: response.intent_hash,
                 })
             }
@@ -387,6 +436,27 @@ impl IntentsProvider {
                 response
             ))),
         }
+    }
+
+    /// Register storage for an account (on-chain, needs gas)
+    pub async fn storage_deposit(&self, token: &str, account_id: Option<&str>) -> Result<bool> {
+        let request = StorageDepositRequest {
+            token: token.to_string(),
+            account_id: account_id.map(|s| s.to_string()),
+        };
+
+        let response = self.client
+            .post(&format!("{}/wallet/v1/storage-deposit", self.config.api_url))
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&request)
+            .send()
+            .await?
+            .json::<StorageDepositResponse>()
+            .await?;
+
+        info!("Storage deposit: already_registered={}", response.already_registered);
+
+        Ok(response.already_registered)
     }
 }
 
@@ -417,9 +487,13 @@ struct WithdrawRequest {
 #[derive(Debug, Deserialize)]
 struct WithdrawResponse {
     #[allow(dead_code)]
-    request_id: String,
-    status: String,
-    intent_hash: String,
+    request_id: Option<String>,
+    #[allow(dead_code)]
+    status: Option<String>,
+    #[allow(dead_code)]
+    intent_hash: Option<String>,
+    error: Option<String>,
+    message: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -432,12 +506,18 @@ struct CreateCheckRequest {
 
 #[derive(Debug, Deserialize)]
 struct PaymentCheckResponse {
-    check_id: String,
-    check_key: String,
-    token: String,
-    amount: String,
+    #[allow(dead_code)]
+    request_id: Option<String>,
+    #[allow(dead_code)]
+    status: Option<String>,
+    check_id: Option<String>,
+    check_key: Option<String>,
+    token: Option<String>,
+    amount: Option<String>,
     memo: Option<String>,
     expires_at: Option<String>,
+    error: Option<String>,
+    message: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -468,10 +548,14 @@ struct SwapRequest {
 
 #[derive(Debug, Deserialize)]
 struct SwapResponse {
-    request_id: String,
-    status: String,
+    #[allow(dead_code)]
+    request_id: Option<String>,
+    #[allow(dead_code)]
+    status: Option<String>,
     amount_out: Option<String>,
     intent_hash: Option<String>,
+    error: Option<String>,
+    message: Option<String>,
 }
 
 /// Payment check
@@ -489,8 +573,10 @@ pub struct PaymentCheck {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TokenInfo {
     pub symbol: String,
-    pub name: String,
-    pub chain: String,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub chains: Vec<String>,
     pub defuse_asset_id: String,
     pub decimals: u8,
 }
@@ -501,6 +587,17 @@ pub struct SwapResult {
     pub request_id: String,
     pub amount_out: NearAmount,
     pub intent_hash: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StorageDepositRequest {
+    token: String,
+    account_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StorageDepositResponse {
+    already_registered: bool,
 }
 
 #[cfg(test)]
