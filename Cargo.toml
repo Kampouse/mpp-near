@@ -1,0 +1,65 @@
+[package]
+name = "mpp-near"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "NEAR payment provider for Machine Payments Protocol (MPP)"
+repository = "https://github.com/tempoxyz/mpp-rs"
+readme = "README.md"
+
+[features]
+default = ["client", "server"]
+client = ["reqwest", "reqwest-middleware"]
+server = ["axum", "tower"]
+intents = []
+
+[dependencies]
+# Core
+async-trait = "0.1"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+http = "1.0"
+
+# HTTP
+reqwest = { version = "0.12", optional = true, features = ["json"] }
+reqwest-middleware = { version = "0.3", optional = true }
+
+# Server
+axum = { version = "0.7", optional = true }
+tower = { version = "0.4", optional = true }
+
+# NEAR (no near-sdk - we're off-chain)
+near-crypto = "0.26"
+near-jsonrpc-client = "0.13"
+near-primitives = "0.26"
+
+# Crypto
+ed25519-dalek = "2.0"
+rand = "0.8"
+
+# Utils
+hex = "0.4"
+base64 = "0.22"
+url = "2.5"
+uuid = { version = "1.0", features = ["v4"] }
+bs58 = "0.5"
+anyhow = "1.0"
+
+[dev-dependencies]
+tokio-test = "0.4"
+wiremock = "0.6"
+
+[[example]]
+name = "near_client"
+required-features = ["client"]
+
+[[example]]
+name = "near_server"
+required-features = ["server"]
+
+[[example]]
+name = "intents_client"
+required-features = ["client", "intents"]
