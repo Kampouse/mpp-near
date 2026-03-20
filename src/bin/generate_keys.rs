@@ -1,14 +1,15 @@
 // Simple keypair generator for NEAR
-use ed25519_dalek::Keypair;
+use ed25519_dalek::SigningKey;
+use rand::rngs::OsRng;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Generate a new keypair using the correct API
-    let mut csprng = rand::rngs::OsRng;
-    let keypair: Keypair = Keypair::generate(&mut csprng);
+    // Generate a new signing key using ed25519-dalek 2.0 API
+    let signing_key = SigningKey::generate(&mut OsRng);
 
     // Encode as NEAR format (ed25519:base58)
-    let secret_bytes = keypair.secret.as_bytes();
-    let public_bytes = keypair.public.as_bytes();
+    let secret_bytes = signing_key.as_bytes();
+    let verifying_key = signing_key.verifying_key();
+    let public_bytes = verifying_key.as_bytes();
 
     // NEAR uses base58 encoding with "ed25519:" prefix
     let secret_b58 = bs58::encode(secret_bytes).into_string();
