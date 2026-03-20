@@ -1,71 +1,63 @@
-//! NEAR payment provider for Machine Payments Protocol (MPP)
+//! MPP-NEAR - Machine Payments Protocol with NEAR Intents
 //!
-//! This crate extends mpp-rs with NEAR blockchain support, enabling:
-//! - HTTP 402 payments with NEAR tokens
-//! - NEP-141 token payments (USDC, etc.)
-//! - Gasless payments via NEAR Intents
+//! This crate provides:
+//! - **CLI**: Command-line tool for MPP payments
+//! - **Client**: HTTP client for paying MPP endpoints
+//! - **Primitives**: Spec-compliant MPP-1.0 types
+//! - **Server**: Axum middleware (optional, feature: "server")
 //!
-//! # Example
+//! ## Quick Start
 //!
 //! ```rust,no_run
-//! use mpp_near::client::{NearProvider, NearConfig};
-//! use reqwest_middleware::ClientBuilder;
+//! use mpp_near::{Challenge, RequestData, Credential, Receipt};
 //!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let provider = NearProvider::new(
-//!         "kampouse.near".parse()?,
-//!         "ed25519:...".parse()?,
-//!         "https://rpc.mainnet.near.org",
-//!     )?;
-//!     
-//!     let client = ClientBuilder::new(reqwest::Client::new())
-//!         .with(mpp_near::client::PaymentMiddleware::new(provider))
-//!         .build();
-//!     
-//!     // Automatically handles 402 responses with NEAR payment
-//!     let resp = client.get("https://api.example.com/paid").send().await?;
-//!     Ok(())
-//! }
+//! // Create a payment request
+//! let request = RequestData::new("0.001", "wallet.near")
+//!     .currency("USDC");
+//!
+//! // Create a challenge (server-side)
+//! let challenge = Challenge::builder()
+//!     .realm("api.example.com")
+//!     .method("near-intents")
+//!     .intent("charge")
+//!     .request(request)
+//!     .secret(b"hmac-secret")
+//!     .build()?;
+//!
+//! // Client pays and creates credential
+//! let credential = Credential::builder()
+//!     .challenge(&challenge)
+//!     .proof("intent_hash_from_payment")
+//!     .build()?;
+//!
+//! // Server verifies and issues receipt
+//! let receipt = Receipt::for_payment(&challenge.id, None, "0.001", "USDC");
+//! # Ok::<(), mpp_near::Error>(())
 //! ```
 
-pub mod types;
-pub mod client;
-pub mod server;
+pub mod primitives;
 
-pub use types::{AccountId, Gas, NearAmount, TransactionHash};
-pub use client::{NearProvider, NearConfig, PaymentMiddleware};
-pub use server::{NearVerifier, NearPayment};
+#[cfg(feature = "server")]
+pub mod middleware;
 
-/// Errors for NEAR MPP operations
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Invalid account ID: {0}")]
-    InvalidAccountId(String),
-    
-    #[error("Invalid signature: {0}")]
-    InvalidSignature(String),
-    
-    #[error("RPC error: {0}")]
-    RpcError(String),
-    
-    #[error("Transaction failed: {0}")]
-    TransactionFailed(String),
-    
-    #[error("Insufficient balance: required {required}, available {available}")]
-    InsufficientBalance { required: String, available: String },
-    
-    #[error("Payment verification failed: {0}")]
-    VerificationFailed(String),
-    
-    #[error("Invalid challenge: {0}")]
-    InvalidChallenge(String),
-    
-    #[error("Serialization error: {0}")]
-    SerializationError(#[from] serde_json::Error),
-    
-    #[error("HTTP error: {0}")]
-    HttpError(#[from] reqwest::Error),
-}
+#[cfg(feature = "near-intents")]
+pub mod near_intents;
 
-pub type Result<T> = std::result::Result<T, Error>;
+// Re-export primitives for convenience
+pub use primitives::{
+    Challenge, ChallengeBuilder, RequestData,
+    Credential, CredentialBuilder, ChallengeEcho,
+    Receipt, ReceiptBuilder,
+    Problem, ProblemType,
+    Method, MethodRegistry, PaymentRequest, PaymentProof,
+    BodyDigest,
+    VerificationResult, Verifier,
+    VERSION, DEFAULT_CHALLENGE_TTL,
+    Error, Result,
+};
+
+// Re-export specific headers
+pub use primitives::headers::{
+    WWW_AUTHENTICATE, AUTHORIZATION, PAYMENT_RECEIPT,
+    CONTENT_DIGEST, RETRY_AFTER, CACHE_CONTROL,
+};
