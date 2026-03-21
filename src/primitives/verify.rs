@@ -1,6 +1,6 @@
 //! MPP Verifier - Payment verification trait and result types
 
-use crate::{Challenge, Credential, Method, Error, Result};
+use crate::{Challenge, Credential, Method, Result};
 
 /// Result of payment verification
 #[derive(Debug, Clone, PartialEq)]

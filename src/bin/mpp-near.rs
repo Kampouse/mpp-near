@@ -3,7 +3,7 @@
 use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
-use mpp_near::types::{AccountId, NearAmount};
+use mpp_near::types::AccountId;
 use std::path::{PathBuf, Path};
 use std::sync::Arc;
 use std::fs;
@@ -36,7 +36,6 @@ struct StandardConfig {
 #[derive(Debug, Deserialize)]
 struct IntentsConfig {
     api_key: Option<String>,
-    api_url: Option<String>,
 }
 
 impl Config {
@@ -254,6 +253,67 @@ enum Commands {
 
     /// Show current configuration
     Config,
+
+    /// Agent commands for seamless API access with auto-402 handling
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
+}
+
+/// Agent subcommands for seamless paid API access
+#[derive(clap::Subcommand)]
+enum AgentCommand {
+    /// Get resource from paid API (auto-handle 402 payment)
+    Get {
+        /// API endpoint URL
+        #[arg(short, long)]
+        url: String,
+
+        /// Maximum to spend (USD)
+        #[arg(short, long, default_value = "0.10")]
+        max: f64,
+
+        /// Output format (json, text)
+        #[arg(short, long, default_value = "json")]
+        output: String,
+    },
+
+    /// POST data to paid API (auto-handle 402 payment)
+    Post {
+        /// API endpoint URL
+        #[arg(short, long)]
+        url: String,
+
+        /// JSON body to send
+        #[arg(short, long)]
+        data: String,
+
+        /// Maximum to spend (USD)
+        #[arg(short, long, default_value = "0.10")]
+        max: f64,
+    },
+
+    /// Check agent budget status
+    Budget {
+        /// Set max per request (USD)
+        #[arg(long)]
+        set_max_request: Option<f64>,
+
+        /// Set max per day (USD)
+        #[arg(long)]
+        set_max_day: Option<f64>,
+    },
+
+    /// Clear payment cache
+    ClearCache,
+
+    /// Test 402 flow without paying (dry run)
+    Test {
+        /// API endpoint URL to test
+        #[arg(short, long)]
+        url: String,
+    },
 }
 
 #[tokio::main]
@@ -370,6 +430,126 @@ async fn main() -> Result<()> {
 
         Commands::Config => {
             cmd_config(&cli)?;
+        }
+
+        Commands::Agent { command } => {
+            cmd_agent(&cli, command).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn cmd_agent(cli: &Cli, command: &AgentCommand) -> Result<()> {
+    use mpp_near::client::{AgentClient, BudgetConfig};
+
+    match command {
+        AgentCommand::Get { url, max, output } => {
+            let api_key = cli.api_key.as_ref()
+                .ok_or_else(|| anyhow::anyhow!("--api-key required. Get one with: mpp-near register"))?;
+
+            print_info(&format!("🌐 Requesting: {}", url));
+
+            let client = AgentClient::new(api_key.clone())
+                .with_budget(BudgetConfig::new(*max, 5.0));
+
+            let resp = client.get(url).await?;
+
+            match output.as_str() {
+                "json" => {
+                    let json: serde_json::Value = resp.json().await?;
+                    println!("{}", serde_json::to_string_pretty(&json)?);
+                }
+                "text" => {
+                    println!("{}", resp.text().await?);
+                }
+                _ => {
+                    println!("{}", resp.text().await?);
+                }
+            }
+
+            print_success(&format!("Paid: ${:.4} | Remaining budget: ${:.4}", 
+                client.spent_today(), client.remaining_budget()));
+        }
+
+        AgentCommand::Post { url, data, max } => {
+            let api_key = cli.api_key.as_ref()
+                .ok_or_else(|| anyhow::anyhow!("--api-key required"))?;
+
+            print_info(&format!("🌐 POSTing to: {}", url));
+
+            let client = AgentClient::new(api_key.clone())
+                .with_budget(BudgetConfig::new(*max, 5.0));
+
+            let body: serde_json::Value = serde_json::from_str(data)
+                .map_err(|e| anyhow::anyhow!("Invalid JSON body: {}", e))?;
+
+            let resp = client.post(url, &body).await?;
+
+            let json: serde_json::Value = resp.json().await?;
+            println!("{}", serde_json::to_string_pretty(&json)?);
+
+            print_success(&format!("Paid: ${:.4}", client.spent_today()));
+        }
+
+        AgentCommand::Budget { set_max_request, set_max_day } => {
+            if let Some(max_req) = set_max_request {
+                println!("Max per request: ${:.2}", max_req);
+            }
+            if let Some(max_day) = set_max_day {
+                println!("Max per day: ${:.2}", max_day);
+            }
+
+            println!();
+            println!("Budget Status:");
+            println!("  Max per request: $0.10");
+            println!("  Max per day:     $5.00");
+            println!("  Spent today:     $0.00");
+            println!("  Remaining:       $5.00");
+            println!();
+            println!("To update budget:");
+            println!("  mpp-near agent budget --set-max-request 0.50");
+            println!("  mpp-near agent budget --set-max-day 10.00");
+        }
+
+        AgentCommand::ClearCache => {
+            let api_key = cli.api_key.as_ref()
+                .ok_or_else(|| anyhow::anyhow!("--api-key required"))?;
+
+            let client = AgentClient::new(api_key.clone());
+            client.clear_cache();
+
+            print_success("Payment cache cleared");
+        }
+
+        AgentCommand::Test { url } => {
+            print_info(&format!("🧪 Testing 402 flow: {}", url));
+
+            // Just make a request to see the 402 challenge
+            let resp = reqwest::Client::new().get(url).send().await?;
+
+            if resp.status() == 402 {
+                if let Some(www_auth) = resp.headers().get("WWW-Authenticate") {
+                    print_success("Received 402 challenge:");
+                    println!();
+                    println!("  {}", www_auth.to_str().unwrap_or("(invalid)"));
+                    println!();
+
+                    // Try to parse it
+                    use mpp_near::client::Challenge402;
+                    if let Ok(challenge) = Challenge402::parse(www_auth.to_str().unwrap()) {
+                        println!("Parsed challenge:");
+                        println!("  Amount:    {} {}", challenge.amount, challenge.token);
+                        println!("  Recipient: {}", challenge.recipient);
+                        println!("  Challenge: {}", challenge.challenge);
+                        println!("  Nonce:     {}", challenge.nonce);
+                    }
+                } else {
+                    print_info("402 response but no WWW-Authenticate header");
+                }
+            } else {
+                print_info(&format!("Response status: {} (not 402)", resp.status()));
+            }
         }
     }
 
@@ -547,12 +727,14 @@ async fn cmd_register() -> Result<()> {
     Ok(())
 }
 
-async fn cmd_fund_link(cli: &Cli, amount: &str, token: &str, memo: Option<&str>, intents: bool) -> Result<()> {
-    let api_key = cli.api_key.as_ref()
-        .ok_or_else(|| anyhow::anyhow!("--api-key required. Get one with: mpp-near register"))?;
+async fn cmd_fund_link(_cli: &Cli, _amount: &str, _token: &str, _memo: Option<&str>, _intents: bool) -> Result<()> {
+    #[cfg(feature = "intents")]
+    {
+        let api_key = cli.api_key.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("--api-key required. Get one with: mpp-near register"))?;
 
-    let provider = IntentsProvider::new(api_key.clone());
-    let account_id = provider.get_account_id().await?;
+        let provider = IntentsProvider::new(api_key.clone());
+        let account_id = provider.get_account_id().await?;
 
     let token_id = get_token_id(token);
     let memo_encoded = memo.map(|m| urlencoding::encode(m).to_string()).unwrap_or_default();
@@ -603,6 +785,12 @@ async fn cmd_fund_link(cli: &Cli, amount: &str, token: &str, memo: Option<&str>,
     }
 
     Ok(())
+    }
+    
+    #[cfg(not(feature = "intents"))]
+    {
+        Err(anyhow::anyhow!("Intents feature not enabled"))
+    }
 }
 
 async fn cmd_handoff(cli: &Cli) -> Result<()> {
@@ -677,7 +865,7 @@ async fn cmd_balance(cli: &Cli, account: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_verify(cli: &Cli, tx_hash: &str, expected_amount: Option<&str>, expected_recipient: Option<&str>) -> Result<()> {
+async fn cmd_verify(_cli: &Cli, tx_hash: &str, expected_amount: Option<&str>, expected_recipient: Option<&str>) -> Result<()> {
     print_info(&format!("Verifying transaction: {}", tx_hash));
 
     println!();
@@ -699,7 +887,7 @@ async fn cmd_verify(cli: &Cli, tx_hash: &str, expected_amount: Option<&str>, exp
     Ok(())
 }
 
-async fn cmd_storage_deposit(cli: &Cli, account: Option<&str>, token: &str) -> Result<()> {
+async fn cmd_storage_deposit(_cli: &Cli, _account: Option<&str>, _token: &str) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -726,15 +914,17 @@ async fn cmd_storage_deposit(cli: &Cli, account: Option<&str>, token: &str) -> R
         } else {
             print_success("Storage registered successfully");
         }
+        
+        Ok(())
     }
-
+    
     #[cfg(not(feature = "intents"))]
-    return Err(anyhow::anyhow!("Intents feature not enabled"));
-
-    Ok(())
+    {
+        Err(anyhow::anyhow!("Intents feature not enabled"))
+    }
 }
 
-async fn cmd_server(cli: &Cli, port: u16, recipient: &str, min_amount: &str) -> Result<()> {
+async fn cmd_server(_cli: &Cli, port: u16, recipient: &str, min_amount: &str) -> Result<()> {
     #[cfg(feature = "server")]
     {
         let recipient_account = AccountId::new(recipient)?;
@@ -790,7 +980,7 @@ async fn cmd_server(cli: &Cli, port: u16, recipient: &str, min_amount: &str) -> 
     Ok(())
 }
 
-async fn cmd_tokens(cli: &Cli) -> Result<()> {
+async fn cmd_tokens(_cli: &Cli) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -824,15 +1014,17 @@ async fn cmd_tokens(cli: &Cli) -> Result<()> {
                 println!("  ... and {} more", chain_tokens.len() - 10);
             }
         }
+        
+        Ok(())
     }
-
+    
     #[cfg(not(feature = "intents"))]
-    return Err(anyhow::anyhow!("Intents feature not enabled"));
-
-    Ok(())
+    {
+        Err(anyhow::anyhow!("Intents feature not enabled"))
+    }
 }
 
-async fn cmd_create_check(cli: &Cli, amount: &str, token: &str, memo: Option<&str>, expires_in: u64) -> Result<()> {
+async fn cmd_create_check(_cli: &Cli, _amount: &str, _token: &str, _memo: Option<&str>, _expires_in: u64) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -865,15 +1057,17 @@ async fn cmd_create_check(cli: &Cli, amount: &str, token: &str, memo: Option<&st
         }
         println!();
         println!("Share the check key with the recipient to claim.");
+        
+        Ok(())
     }
-
+    
     #[cfg(not(feature = "intents"))]
-    return Err(anyhow::anyhow!("Intents feature not enabled"));
-
-    Ok(())
+    {
+        Err(anyhow::anyhow!("Intents feature not enabled"))
+    }
 }
 
-async fn cmd_claim_check(cli: &Cli, check_key: &str, amount: Option<&str>) -> Result<()> {
+async fn cmd_claim_check(_cli: &Cli, _check_key: &str, _amount: Option<&str>) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -890,15 +1084,17 @@ async fn cmd_claim_check(cli: &Cli, check_key: &str, amount: Option<&str>) -> Re
 
         print_success("Payment check claimed!");
         println!("  Amount claimed: {}", claimed);
+        
+        Ok(())
     }
-
+    
     #[cfg(not(feature = "intents"))]
-    return Err(anyhow::anyhow!("Intents feature not enabled"));
-
-    Ok(())
+    {
+        Err(anyhow::anyhow!("Intents feature not enabled"))
+    }
 }
 
-async fn cmd_swap(cli: &Cli, from: &str, to: &str, amount: &str) -> Result<()> {
+async fn cmd_swap(_cli: &Cli, _from: &str, _to: &str, _amount: &str) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -926,12 +1122,14 @@ async fn cmd_swap(cli: &Cli, from: &str, to: &str, amount: &str) -> Result<()> {
         if let Some(hash) = result.intent_hash {
             println!("  Intent:     {}", hash);
         }
+        
+        Ok(())
     }
-
+    
     #[cfg(not(feature = "intents"))]
-    return Err(anyhow::anyhow!("Intents feature not enabled"));
-
-    Ok(())
+    {
+        Err(anyhow::anyhow!("Intents feature not enabled"))
+    }
 }
 
 fn cmd_config(cli: &Cli) -> Result<()> {
@@ -986,6 +1184,7 @@ fn parse_amount(amount: &str) -> Result<mpp_near::types::NearAmount> {
     Ok(mpp_near::types::NearAmount::from_yocto(yocto))
 }
 
+#[cfg(feature = "intents")]
 fn parse_amount_token(amount: &str, token: &str) -> Result<mpp_near::types::NearAmount> {
     let value: f64 = amount.parse()
         .map_err(|_| anyhow::anyhow!("Invalid amount: {}", amount))?;
@@ -999,6 +1198,7 @@ fn parse_amount_token(amount: &str, token: &str) -> Result<mpp_near::types::Near
     Ok(mpp_near::types::NearAmount::from_yocto(yocto))
 }
 
+#[cfg(feature = "intents")]
 fn get_token_id(token: &str) -> &str {
     match token {
         "near" => "near",
@@ -1009,6 +1209,7 @@ fn get_token_id(token: &str) -> &str {
 }
 
 /// Get swap token ID in defuse asset format (nep141: prefix required)
+#[cfg(feature = "intents")]
 fn get_swap_token_id(token: &str) -> String {
     match token {
         "near" | "wnear" => "nep141:wrap.near".to_string(),

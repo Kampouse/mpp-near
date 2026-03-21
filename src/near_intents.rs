@@ -3,7 +3,6 @@
 //! Implements MPP payment verification using NEAR Intents via OutLayer API.
 
 use serde::{Deserialize, Serialize};
-use async_trait::async_trait;
 
 use crate::primitives::{Challenge, Credential, Method, Error, Result};
 use crate::primitives::method::{PaymentRequest, PaymentProof};

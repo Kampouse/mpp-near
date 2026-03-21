@@ -7,9 +7,52 @@ NEAR payment provider for [Machine Payments Protocol (MPP)](https://mpp.dev).
 
 Enables HTTP 402 payments with NEAR blockchain - pay for API calls with NEAR or NEP-141 tokens (USDC, etc.) in a single HTTP request.
 
-## 🎯 Two Ways to Use MPP-NEAR
+## 🎯 Three Ways to Use MPP-NEAR
 
-MPP-NEAR serves two complementary use cases:
+MPP-NEAR serves three complementary use cases:
+
+### 🤖 For Autonomous Agents — Seamless Auto-Payment
+
+Use the **Agent Client** for AI agents that need to seamlessly access paid APIs without manual payment handling.
+
+**Benefits:**
+- ✅ Auto-detect HTTP 402 responses
+- ✅ Parse payment challenges automatically
+- ✅ Pay via OutLayer (gasless)
+- ✅ Retry requests with payment proof
+- ✅ Budget controls (per-request, per-day limits)
+- ✅ Session caching (avoid re-payment)
+
+**Quick Start:**
+```rust
+use mpp_near::client::{AgentClient, BudgetConfig};
+
+// Create client with budget limits
+let client = AgentClient::new("wk_your_api_key")
+    .with_budget(BudgetConfig::new(0.10, 5.0)); // $0.10 per request, $5.00 per day
+
+// GET request - auto-handles 402 payment
+let data = client.get("https://paid-api.com/data").await?;
+
+// POST request - also auto-handles payment
+let result = client.post("https://api.example.com/submit", &json!({"key": "value"})).await?;
+```
+
+**CLI equivalent:**
+```bash
+# GET with auto-payment
+mpp-near agent get --url https://api.example.com/data --max 0.10
+
+# POST with auto-payment
+mpp-near agent post --url https://api.example.com/submit --data '{"key":"value"}'
+
+# Test 402 flow (dry run)
+mpp-near agent test --url https://api.example.com/data
+```
+
+**Full documentation:** See [AGENT_CLIENT.md](AGENT_CLIENT.md) for complete guide.
+
+---
 
 ### 🖥️ For Service Providers — Build Payment-Gated APIs
 

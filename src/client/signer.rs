@@ -105,6 +105,16 @@ impl NearSigner {
         let signature = self.signing_key.sign(bytes);
         Ok(signature.to_bytes())
     }
+    
+    /// Export secret key in NEAR format (ed25519:base58...)
+    pub fn export_secret_key(&self) -> Result<String> {
+        match &self.secret_key {
+            SecretKey::ED25519(key) => {
+                Ok(format!("ed25519:{}", bs58::encode(&key.0).into_string()))
+            }
+            _ => Err(Error::InvalidSignature("Only ED25519 keys can be exported".to_string())),
+        }
+    }
 }
 
 #[cfg(test)]

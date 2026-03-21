@@ -3,7 +3,7 @@
 //! Provides middleware and extractors for payment-gated routes.
 
 use axum::{
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use std::sync::Arc;
@@ -11,8 +11,8 @@ use tokio::sync::RwLock;
 use std::collections::HashMap;
 
 use crate::primitives::{
-    Challenge, RequestData, Credential, Receipt, Problem, ProblemType,
-    Verifier, VerificationResult,
+    Challenge, RequestData, Credential, Receipt, Problem,
+    Verifier,
     WWW_AUTHENTICATE, PAYMENT_RECEIPT, CACHE_CONTROL, CACHE_NO_STORE, CACHE_PRIVATE,
 };
 

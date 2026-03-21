@@ -65,6 +65,14 @@ pub enum Error {
     #[error("Invalid amount: {0}")]
     InvalidAmount(String),
     
+    /// Invalid signature
+    #[error("Invalid signature: {0}")]
+    InvalidSignature(String),
+    
+    /// Invalid account ID
+    #[error("Invalid account ID: {0}")]
+    InvalidAccountId(String),
+    
     /// HTTP error
     #[error("HTTP error: {0}")]
     Http(#[from] http::Error),
@@ -76,6 +84,23 @@ pub enum Error {
     /// Base64 decode error
     #[error("Base64 decode error: {0}")]
     Base64(#[from] base64::DecodeError),
+    
+    /// Reqwest HTTP error
+    #[cfg(feature = "client")]
+    #[error("HTTP request error: {0}")]
+    Reqwest(#[from] reqwest::Error),
+    
+    /// Transaction failed
+    #[error("Transaction failed: {0}")]
+    TransactionFailed(String),
+    
+    /// Insufficient balance
+    #[error("Insufficient balance: have {available}, need {required}")]
+    InsufficientBalance { available: String, required: String },
+    
+    /// RPC error
+    #[error("RPC error: {0}")]
+    RpcError(String),
     
     /// Other error
     #[error("{0}")]

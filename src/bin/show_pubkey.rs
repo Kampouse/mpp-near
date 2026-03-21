@@ -1,7 +1,7 @@
 //! Tool to show the public key for a given private key
 
 use clap::Parser;
-use near_crypto::{SecretKey, PublicKey};
+use near_crypto::SecretKey;
 use std::str::FromStr;
 
 #[derive(Parser)]

@@ -3,7 +3,7 @@
 use clap::Parser;
 use near_jsonrpc_client::JsonRpcClient;
 use near_jsonrpc_client::methods::query::RpcQueryRequest;
-use near_primitives::views::{AccessKeyView, QueryRequest};
+use near_primitives::views::QueryRequest;
 use near_primitives::types::{AccountId, BlockReference};
 
 #[derive(Parser)]

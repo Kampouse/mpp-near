@@ -58,8 +58,28 @@ impl PaymentMiddleware {
             challenge.amount
         );
         
+        // Check if we've already seen this challenge (prevent double-payment)
+        {
+            let state = self.state.read().await;
+            if state.pending_payments.contains_key(&challenge.challenge_id) {
+                tracing::warn!("Duplicate challenge detected: {}", challenge.challenge_id);
+            }
+        }
+        
+        // Store the pending challenge
+        {
+            let mut state = self.state.write().await;
+            state.pending_payments.insert(challenge.challenge_id.clone(), challenge.clone());
+        }
+        
         // Pay the challenge
         let credential = self.provider.pay_challenge(&challenge).await?;
+        
+        // Remove from pending after successful payment
+        {
+            let mut state = self.state.write().await;
+            state.pending_payments.remove(&challenge.challenge_id);
+        }
         
         // Build retry request
         let client = reqwest::Client::new();
@@ -95,6 +115,7 @@ impl Middleware for PaymentMiddleware {
                     // Check for 402
                     if resp.status() == 402 && retries < self.max_retries {
                         retries += 1;
+                        tracing::debug!("Retry attempt {}", retries);
                         
                         // Handle payment
                         match self.handle_402(resp, &req).await {

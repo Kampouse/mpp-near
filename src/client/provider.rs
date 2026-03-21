@@ -120,9 +120,8 @@ impl NearProvider {
     /// Execute NEAR transfer
     pub async fn transfer(&self, recipient: &AccountId, amount: NearAmount) -> Result<TransactionHash> {
         use near_primitives::{
-            transaction::{Action, TransferAction},
             types::{BlockReference},
-            views::{AccessKeyView, QueryRequest},
+            views::QueryRequest,
         };
         use near_jsonrpc_client::methods::{
             block::RpcBlockRequest,
@@ -244,10 +243,7 @@ impl NearProvider {
         block_hash: &near_primitives::hash::CryptoHash,
         nonce: u64,
     ) -> Result<near_primitives::transaction::SignedTransaction> {
-        use near_primitives::{
-            transaction::{Action, TransferAction},
-            borsh::BorshSerialize,
-        };
+        use near_primitives::transaction::{Action, TransferAction};
 
         // Parse account IDs
         let signer_id: near_primitives::types::AccountId = self.config.account_id.as_str().parse()

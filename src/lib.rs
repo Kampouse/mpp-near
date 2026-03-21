@@ -3,6 +3,7 @@
 //! This crate provides:
 //! - **CLI**: Command-line tool for MPP payments
 //! - **Client**: HTTP client for paying MPP endpoints
+//! - **Agent Client**: Seamless auto-402 handling for autonomous agents
 //! - **Primitives**: Spec-compliant MPP-1.0 types
 //! - **Server**: Axum middleware (optional, feature: "server")
 //!
@@ -34,14 +35,42 @@
 //! let receipt = Receipt::for_payment(&challenge.id, None, "0.001", "USDC");
 //! # Ok::<(), mpp_near::Error>(())
 //! ```
+//!
+//! ## Seamless Agent Client
+//!
+//! ```rust,no_run
+//! use mpp_near::client::{AgentClient, BudgetConfig};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Create client with budget limits
+//!     let client = AgentClient::new("wk_your_api_key")
+//!         .with_budget(BudgetConfig::new(0.10, 5.0)); // $0.10 per request, $5.00 per day
+//!     
+//!     // GET request - auto-handles 402 payment
+//!     let data = client.get("https://paid-api.com/data").await?;
+//!     
+//!     // POST request - also auto-handles payment
+//!     let result = client.post("https://paid-api.com/submit", &serde_json::json!({"key": "value"})).await?;
+//!     
+//!     Ok(())
+//! }
+//! ```
 
 pub mod primitives;
+pub mod types;
 
 #[cfg(feature = "server")]
 pub mod middleware;
 
+#[cfg(feature = "server")]
+pub mod server;
+
 #[cfg(feature = "near-intents")]
 pub mod near_intents;
+
+// Client module (always available)
+pub mod client;
 
 // Re-export primitives for convenience
 pub use primitives::{

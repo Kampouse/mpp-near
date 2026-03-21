@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use sha2::Sha256;
 use hmac::{Hmac, Mac};
 
-use crate::{Result, Error, VERSION, DEFAULT_CHALLENGE_TTL};
+use crate::{Result, Error, DEFAULT_CHALLENGE_TTL};
 
 type HmacSha256 = Hmac<Sha256>;
 

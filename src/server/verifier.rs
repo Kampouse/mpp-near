@@ -1,14 +1,13 @@
 //! NEAR payment verification
 
 use near_jsonrpc_client::JsonRpcClient;
-use near_primitives::views::FinalExecutionStatus;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use crate::types::{AccountId, NearAmount, NearChallenge, NearCredential, TransactionHash};
+use crate::types::{AccountId, NearAmount, NearChallenge, NearCredential};
 use crate::{Error, Result};
 
 /// Verifier configuration
@@ -41,16 +40,16 @@ impl Default for VerifierConfig {
     }
 }
 
-/// Cache entry
+/// Cache entry (keyed by tx_hash)
 #[derive(Debug, Clone)]
 struct CacheEntry {
-    credential: NearCredential,
     verified_at: Instant,
 }
 
 /// NEAR payment verifier
 pub struct NearVerifier {
     config: VerifierConfig,
+    #[allow(dead_code)]
     client: JsonRpcClient,
     pending_challenges: Arc<RwLock<HashMap<String, NearChallenge>>>,
     verified_cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
@@ -135,7 +134,6 @@ impl NearVerifier {
             cache.insert(
                 credential.tx_hash.to_string(),
                 CacheEntry {
-                    credential: credential.clone(),
                     verified_at: Instant::now(),
                 },
             );
@@ -145,8 +143,8 @@ impl NearVerifier {
         Ok(true)
     }
     
-    /// Get current block height
-    async fn get_block_height(&self) -> Result<u64> {
+    /// Get current block height (useful for checking transaction finality)
+    pub async fn get_block_height(&self) -> Result<u64> {
         let request = near_jsonrpc_client::methods::block::RpcBlockRequest {
             block_reference: near_primitives::types::BlockReference::Finality(
                 near_primitives::types::Finality::Final
