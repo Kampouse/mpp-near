@@ -36,40 +36,40 @@ export default function Comparison() {
     <section id="comparison" className="py-20 px-6">
       <div className="max-w-6xl mx-auto">
         <div className="text-center mb-12">
-          <h2 className="text-3xl md:text-4xl font-bold mb-4">
-            Standard vs Intents
+          <h2 className="text-3xl md:text-4xl font-bold mb-4 text-slate-900 dark:text-slate-50">
+            Payment Providers
           </h2>
-          <p className="text-gray-400">
-            Choose the provider that fits your needs
+          <p className="text-slate-600 dark:text-slate-400">
+            MPP-NEAR supports both standard NEAR transactions and gasless Intents
           </p>
         </div>
-        
+
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-gray-800">
-                <th className="text-left py-4 px-4 font-medium text-gray-400">Feature</th>
-                <th className="text-left py-4 px-4 font-medium text-gray-400">Standard Provider</th>
-                <th className="text-left py-4 px-4 font-medium text-blue-400">Intents Provider</th>
+              <tr className="border-b border-slate-200 dark:border-slate-800">
+                <th className="text-left py-4 px-4 font-medium text-slate-600 dark:text-slate-400">Feature</th>
+                <th className="text-left py-4 px-4 font-medium text-slate-600 dark:text-slate-400">Standard Provider</th>
+                <th className="text-left py-4 px-4 font-medium text-violet-600 dark:text-violet-400">Intents Provider</th>
               </tr>
             </thead>
             <tbody>
               {comparisons.map((row, i) => (
-                <tr key={i} className="border-b border-gray-800/50">
-                  <td className="py-4 px-4 font-medium">{row.feature}</td>
-                  <td className="py-4 px-4 text-gray-400">{row.standard}</td>
-                  <td className="py-4 px-4">{row.intents}</td>
+                <tr key={i} className="border-b border-slate-100 dark:border-slate-800/50 hover:bg-slate-50 dark:hover:bg-slate-800/20 transition-colors">
+                  <td className="py-4 px-4 font-medium text-slate-900 dark:text-slate-100">{row.feature}</td>
+                  <td className="py-4 px-4 text-slate-600 dark:text-slate-400">{row.standard}</td>
+                  <td className="py-4 px-4 text-slate-900 dark:text-slate-100">{row.intents}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        
-        <div className="mt-8 p-6 bg-near-gray/30 rounded-xl border border-gray-800">
-          <h3 className="font-semibold mb-2">When to Use Each</h3>
-          <div className="grid md:grid-cols-2 gap-6 text-sm text-gray-400">
+
+        <div className="mt-8 p-6 bg-white dark:bg-slate-800/30 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none">
+          <h3 className="font-semibold mb-2 text-slate-900 dark:text-slate-100">When to Use Each</h3>
+          <div className="grid md:grid-cols-2 gap-6 text-sm text-slate-600 dark:text-slate-400">
             <div>
-              <div className="font-medium text-white mb-2">Standard Provider</div>
+              <div className="font-medium text-slate-900 dark:text-slate-100 mb-2">Standard Provider</div>
               <ul className="space-y-1">
                 <li>• You need full control over keys</li>
                 <li>• On-chain transactions required</li>
@@ -77,7 +77,7 @@ export default function Comparison() {
               </ul>
             </div>
             <div>
-              <div className="font-medium text-white mb-2">Intents Provider</div>
+              <div className="font-medium text-slate-900 dark:text-slate-100 mb-2">Intents Provider</div>
               <ul className="space-y-1">
                 <li>• Gasless microtransactions</li>
                 <li>• Cross-chain operations</li>

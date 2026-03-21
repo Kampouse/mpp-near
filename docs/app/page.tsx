@@ -4,7 +4,8 @@ import WhatIsMPP from '@/components/WhatIsMPP'
 import WhyUseIt from '@/components/WhyUseIt'
 import Features from '@/components/Features'
 import HowItWorks from '@/components/HowItWorks'
-import CodeExample from '@/components/CodeExample'
+import APISection from '@/components/APISection'
+import CLISection from '@/components/CLISection'
 import Comparison from '@/components/Comparison'
 import Footer from '@/components/Footer'
 
@@ -17,7 +18,8 @@ export default function Home() {
       <WhyUseIt />
       <Features />
       <HowItWorks />
-      <CodeExample />
+      <APISection />
+      <CLISection />
       <Comparison />
       <Footer />
     </main>
