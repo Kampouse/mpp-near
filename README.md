@@ -7,54 +7,94 @@ NEAR payment provider for [Machine Payments Protocol (MPP)](https://mpp.dev).
 
 Enables HTTP 402 payments with NEAR blockchain - pay for API calls with NEAR or NEP-141 tokens (USDC, etc.) in a single HTTP request.
 
-## ✨ What's New
+## 🎯 Two Ways to Use MPP-NEAR
 
-**Full-featured CLI tool** for gasless payments, token swaps, and agent-to-agent payment checks! 🚀
+MPP-NEAR serves two complementary use cases:
 
-- 🪙 **Gasless Payments** - Send NEAR, USDC, USDT without gas via NEAR Intents
-- 🔄 **Token Swaps** - Cross-chain swaps across 20+ blockchains
-- 📝 **Payment Checks** - Agent-to-agent payments with redeemable checks
-- 🖥️ **CLI Tool** - Complete command-line interface for all operations
-- 🔐 **Custody Wallet** - Secure OutLayer wallet management
+### 🖥️ For Service Providers — Build Payment-Gated APIs
 
-## 🚀 Quick Reference
+Use the **Rust SDK** to monetize your APIs with HTTP 402. Accept NEAR payments automatically without handling payment infrastructure.
 
+**Benefits:**
+- ✅ Monetize APIs per-request
+- ✅ Stateless verification (no database needed)
+- ✅ Type-safe Rust primitives
+- ✅ Axum integrations included
+- ✅ Accept NEAR, USDC, USDT, and 100+ tokens
+
+**Quick Start:**
+```toml
+[dependencies]
+mpp-near = { git = "https://github.com/mpp-near/mpp-near" }
+```
+
+```rust
+use axum::{routing::get, Router};
+use mpp_near::server::{NearVerifier, VerifierConfig, NearPayment};
+
+async fn paid_endpoint(payment: NearPayment) -> String {
+    format!("Paid by: {} for {}", payment.payer(), payment.amount())
+}
+```
+
+[→ Server Documentation](#-for-service-providers---rust-api)
+
+---
+
+### 🤖 For Agents & Clients — Make Gasless Payments
+
+Use the **CLI tool** to enable AI agents, scripts, and automated systems to pay for services, swap tokens, and transact gaslessly.
+
+**Benefits:**
+- ✅ Gasless payments (no NEAR needed for fees)
+- ✅ Token swaps across 20+ blockchains
+- ✅ Agent-to-agent payment checks
+- ✅ Cross-chain operations
+- ✅ Perfect for AI agents and automation
+
+**Quick Start:**
 ```bash
-# Install CLI
+# Option 1: Install from crates.io
 cargo install mpp-near --features intents
+
+# Option 2: Clone and build locally
+git clone https://github.com/mpp-near/mpp-near.git
+cd mpp-near
+cargo install --path . --features intents
 
 # Register gasless wallet
 mpp-near register
 
-# Fund wallet
-mpp-near fund-link --amount 0.1 --token near
-
-# Send payment (gasless!)
-mpp-near pay --recipient merchant.near --amount 1
-
-# Create payment check
-mpp-near create-check --amount 10 --token usdc
-
-# Swap tokens (gasless)
-mpp-near swap --from near --to usdc --amount 1
-
-# Start payment server
-mpp-near server --recipient merchant.near --min-amount 0.001
+# Send payment (no gas required!)
+mpp-near pay --recipient merchant.near --amount 1 --token near
 ```
+
+[→ CLI Documentation](#-for-agents--clients---cli-tool)
+
+---
 
 ## Features
 
+### Both Use Cases
 - ✅ NEAR token payments
-- ✅ NEP-141 token support (USDC, etc.)
+- ✅ NEP-141 token support (USDC, USDT, etc.)
 - ✅ **Gasless payments via NEAR Intents** (OutLayer custody wallet)
 - ✅ Agent-to-agent payment checks
 - ✅ Cross-chain swaps (20+ chains)
+- ✅ Replay protection
+- ✅ Balance caching
+
+### Service Providers (Rust SDK)
 - ✅ Automatic 402 handling middleware
 - ✅ Server-side payment verification
 - ✅ Axum extractors for easy integration
-- ✅ Replay protection
-- ✅ Balance caching
-- ✅ CLI tool for all operations
+- ✅ Stateless verification (no database needed)
+
+### Agents & Clients (CLI Tool)
+- ✅ Complete CLI for all operations
+- ✅ Token swaps across 20+ blockchains
+- ✅ Payment checks for agent-to-agent commerce
+- ✅ Gasless transactions
 
 ## Use Cases
 
@@ -99,22 +139,202 @@ mpp-near swap --from near --to eth --amount 10
 
 ## Installation
 
+### For Service Providers (Rust SDK)
+
+Add to your `Cargo.toml`:
+
 ```toml
 [dependencies]
-mpp-near = { git = "https://github.com/kampouse/mpp-near" }
+# Core MPP-NEAR functionality
+mpp-near = { git = "https://github.com/mpp-near/mpp-near" }
 
-# For gasless payments via NEAR Intents
-mpp-near = { git = "https://github.com/kampouse/mpp-near", features = ["intents"] }
+# With server features (Axum integration)
+mpp-near = { git = "https://github.com/mpp-near/mpp-near", features = ["server"] }
+
+# With client features (for making payments as a client)
+mpp-near = { git = "https://github.com/mpp-near/mpp-near", features = ["client"] }
+
+# With everything (client + server + gasless intents)
+mpp-near = { git = "https://github.com/mpp-near/mpp-near", features = ["client", "server", "intents"] }
 ```
 
-## CLI Tool
+**Feature flags:**
+- `client` - HTTP client middleware for automatic 402 handling
+- `server` - Axum extractors and payment verification
+- `intents` / `near-intents` - Gasless payments via OutLayer (these are aliases)
+- Default: All features enabled
+
+### For Agents & Clients (CLI Tool)
+
+**Option 1: Install from source (recommended for latest features)**
+```bash
+# Clone and build
+git clone https://github.com/mpp-near/mpp-near.git
+cd mpp-near
+cargo install --path . --features intents
+```
+
+**Option 2: Install from crates.io (when published)**
+```bash
+cargo install mpp-near --features intents
+```
+
+**Note:** The `intents` feature enables gasless payments via OutLayer. Omit it if you only need standard NEAR transactions.
+
+---
+
+## 🛠️ Setup
+
+### Build Requirements
+
+**For CLI Tool (Agents & Clients):**
+- Rust 1.70 or later
+- No external dependencies required
+
+**For Server Integration (Service Providers):**
+- Rust 1.70 or later
+- Tokio runtime (async runtime)
+
+**Optional: Intents Feature (Gasless Payments)**
+- No additional dependencies - uses HTTP API
+- Requires OutLayer API key (get from `mpp-near register`)
+
+### Development Setup (Build from Source)
+
+If you want to contribute or run the latest development version:
+
+```bash
+# Clone the repository
+git clone https://github.com/mpp-near/mpp-near.git
+cd mpp-near
+
+# Option 1: Install CLI with gasless support
+cargo install --path . --features intents
+
+# Option 2: Install CLI without gasless support
+cargo install --path . --features client
+
+# Option 3: Run directly without installing
+cargo run --release --features intents -- --help
+```
+
+**Build from source features:**
+- `client` - HTTP client for making payments
+- `server` - Axum server for accepting payments
+- `intents` / `near-intents` - Gasless payments via OutLayer (alias)
+- Default: all features enabled
+
+### Verify Installation
+
+```bash
+# Check CLI version
+mpp-near --version
+
+# Run tests (if building from source)
+cargo test
+
+# Run examples
+cargo run --example near_client       # Standard NEAR payments
+cargo run --example near_server       # Payment server
+cargo run --example intents_client    # Gasless payments
+```
+
+### Runtime Setup (First Time Use)
+
+#### Step 1: Register a Gasless Wallet
+
+```bash
+mpp-near register
+```
+
+This creates an OutLayer custody wallet and returns:
+- API key for gasless transactions
+- Wallet management URL
+
+**Save your API key securely** - store it in `~/.mpp-near/config.toml`:
+
+```toml
+method = "intents"
+
+[intents]
+api_key = "wk_..."  # Your API key from register command
+api_url = "https://api.outlayer.fastnear.com"
+```
+
+#### Step 2: Fund Your Wallet
+
+```bash
+# Generate a funding link
+mpp-near fund-link --amount 0.1 --token near
+
+# Or specify a different recipient
+mpp-near fund-link --recipient friend.near --amount 1 --token usdc
+```
+
+Open the generated link in your browser to deposit funds.
+
+#### Step 3: Verify Setup
+
+```bash
+# Check your balance
+mpp-near balance
+
+# List available tokens
+mpp-near tokens
+```
+
+### Configuration
+
+Create `~/.mpp-near/config.toml` for persistent settings:
+
+```toml
+# Payment method: "intents" (gasless) or "standard" (on-chain)
+method = "intents"
+
+[intents]
+api_key = "wk_..."
+api_url = "https://api.outlayer.fastnear.com"
+
+[standard]
+# Only needed for standard provider
+account = "your-account.near"
+private_key = "ed25519:..."
+rpc_url = "https://rpc.mainnet.near.org"
+```
+
+**Security notes:**
+- Never commit config files with API keys
+- Use environment variables for CI/CD: `OUTLAYER_API_KEY=wk_...`
+- Restrict file permissions: `chmod 600 ~/.mpp-near/config.toml`
+
+---
+
+## 🤖 For Agents & Clients — CLI Tool
 
 MPP-NEAR includes a powerful command-line interface for interacting with NEAR payments. The CLI supports both standard NEAR transactions and gasless operations via NEAR Intents.
 
-### Installation
+### Quick Start
 
+1. **Register a gasless custody wallet:**
 ```bash
-cargo install --git https://github.com/kampouse/mpp-near mpp-near --features intents
+mpp-near register
+```
+This creates an OutLayer custody wallet and provides an API key for gasless transactions.
+
+2. **Fund your wallet:**
+```bash
+mpp-near fund-link --amount 0.1 --token near
+```
+Generates a browser link to deposit NEAR into your wallet.
+
+3. **Check your balance:**
+```bash
+mpp-near balance --api-key wk_...
+```
+
+4. **Send a payment (gasless!):**
+```bash
+mpp-near pay --recipient merchant.near --amount 1 --token near
 ```
 
 ### Quick Start
@@ -238,7 +458,7 @@ use reqwest_middleware::ClientBuilder;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider = NearProvider::new(
-        "kampouse.near".parse()?,
+        "merchant.near".parse()?,
         "ed25519:...".parse()?,
         "https://rpc.mainnet.near.org",
     )?;
@@ -461,7 +681,7 @@ mpp-near server --recipient merchant.near --min-amount 0.001
 
 ```bash
 # Standard client
-NEAR_ACCOUNT_ID=kampouse.near \
+NEAR_ACCOUNT_ID=your-account.near \
 NEAR_PRIVATE_KEY=ed25519:... \
 cargo run --example near_client
 
@@ -538,5 +758,5 @@ MIT OR Apache-2.0
 - **Machine Payments Protocol**: https://mpp.dev
 - **NEAR Blockchain**: https://near.org
 - **OutLayer Dashboard**: https://outlayer.fastnear.com
-- **GitHub Repository**: https://github.com/kampouse/mpp-near
-- **Report Issues**: https://github.com/kampouse/mpp-near/issues
+- **GitHub Repository**: https://github.com/mpp-near/mpp-near
+- **Report Issues**: https://github.com/mpp-near/mpp-near/issues
