@@ -31,13 +31,12 @@ use mpp_near::primitives::headers;
 use mpp_near::{
     near_intents::NearIntentsMethod,
     primitives::{
-        Challenge, ChallengeBuilder, Credential, Method, Problem, Receipt, RequestData,
+        Challenge, ChallengeBuilder, Credential, Problem, Receipt, RequestData,
     },
     server::NearVerifier,
     types::{AccountId, NearAmount},
     Error, Result,
 };
-use tracing::warn;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -267,7 +266,7 @@ impl ServerState {
 
                 // Verify recipient matches expected
                 if request_data.recipient != self.config.recipient.to_string() {
-                    warn!("Payment recipient mismatch: expected {}, got {}",
+                    tracing::warn!("Payment recipient mismatch: expected {}, got {}",
                         self.config.recipient, request_data.recipient);
                     return Ok((challenge.clone(), false));
                 }
@@ -300,7 +299,7 @@ impl ServerState {
 
                 // Verify recipient matches expected
                 if request_data.recipient != self.config.recipient.to_string() {
-                    warn!("Payment recipient mismatch: expected {}, got {}",
+                    tracing::warn!("Payment recipient mismatch: expected {}, got {}",
                         self.config.recipient, request_data.recipient);
                     return Ok((challenge.clone(), false));
                 }
@@ -310,7 +309,7 @@ impl ServerState {
                 proof.len() > 10 && !credential.is_mock()
             }
             _ => {
-                warn!("Unknown payment method: {}", challenge.method);
+                tracing::warn!("Unknown payment method: {}", challenge.method);
                 false
             }
         };

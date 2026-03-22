@@ -574,19 +574,32 @@ async fn cmd_pay(cli: &Cli, recipient: &str, amount: &str, token: &str, memo: Op
 
                 let provider = IntentsProvider::new(api_key.clone());
 
-                let result = match token.to_lowercase().as_str() {
-                    "near" => provider.transfer(&recipient, near_amount).await,
-                    "usdc" => provider.transfer_token(
-                        "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
-                        &recipient,
-                        near_amount,
-                    ).await,
-                    "usdt" => provider.transfer_token(
-                        "usdt.tether-token.near",
-                        &recipient,
-                        near_amount,
-                    ).await,
-                    _ => return Err(anyhow::anyhow!("Unsupported token: {}", token)),
+                // Determine if token is a custom token ID (contains dots or special chars)
+                // This allows cross-chain tokens like btc.omft.near, eth.omft.near, etc.
+                let result = if token.contains('.') || token.contains('-') || token.contains('_') {
+                    // Custom token ID - use directly (supports cross-chain OMFT tokens)
+                    print_info(&format!("Using custom token: {}", token));
+                    provider.transfer_token(token, &recipient, near_amount).await
+                } else {
+                    // Standard token shortcuts
+                    match token.to_lowercase().as_str() {
+                        "near" => provider.transfer(&recipient, near_amount).await,
+                        "usdc" => provider.transfer_token(
+                            "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+                            &recipient,
+                            near_amount,
+                        ).await,
+                        "usdt" => provider.transfer_token(
+                            "usdt.tether-token.near",
+                            &recipient,
+                            near_amount,
+                        ).await,
+                        _ => {
+                            eprintln!("{} Unknown token shortcut: {}", "✗".red(), token);
+                            print_info("Try using the full token ID (e.g., btc.omft.near, usdc.tether-token.near)");
+                            return Err(anyhow::anyhow!("Unsupported token: {}. Use full token ID or shortcut (near/usdc/usdt)", token));
+                        }
+                    }
                 };
 
                 match result {
@@ -656,19 +669,35 @@ async fn cmd_pay(cli: &Cli, recipient: &str, amount: &str, token: &str, memo: Op
                     rpc,
                 )?;
 
-                let tx_hash = match token {
-                    "near" => provider.transfer(&recipient, near_amount).await?,
-                    "usdc" => provider.transfer_token(
-                        &AccountId::new("usdc.contract.near")?,
+                // Determine if token is a custom token ID (contains dots or special chars)
+                let tx_hash = if token.contains('.') || token.contains('-') || token.contains('_') {
+                    // Custom token ID - supports cross-chain tokens
+                    print_info(&format!("Using custom token: {}", token));
+                    provider.transfer_token(
+                        &AccountId::new(token)?,
                         &recipient,
                         near_amount,
-                    ).await?,
-                    "usdt" => provider.transfer_token(
-                        &AccountId::new("usdt.tether-token.near")?,
-                        &recipient,
-                        near_amount,
-                    ).await?,
-                    _ => return Err(anyhow::anyhow!("Unsupported token: {}", token)),
+                    ).await?
+                } else {
+                    // Standard token shortcuts
+                    match token.to_lowercase().as_str() {
+                        "near" => provider.transfer(&recipient, near_amount).await?,
+                        "usdc" => provider.transfer_token(
+                            &AccountId::new("usdc.contract.near")?,
+                            &recipient,
+                            near_amount,
+                        ).await?,
+                        "usdt" => provider.transfer_token(
+                            &AccountId::new("usdt.tether-token.near")?,
+                            &recipient,
+                            near_amount,
+                        ).await?,
+                        _ => {
+                            eprintln!("{} Unknown token shortcut: {}", "✗".red(), token);
+                            print_info("Try using the full token ID (e.g., btc.omft.near, usdc.contract.near)");
+                            return Err(anyhow::anyhow!("Unsupported token: {}", token));
+                        }
+                    }
                 };
 
                 print_success("Payment sent!");
