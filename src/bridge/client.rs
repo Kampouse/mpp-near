@@ -2,7 +2,7 @@
 
 use crate::bridge::types::{BridgeError, BridgeRequest, BridgeResponse, BridgeStatus, Chain, TokenInfo};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::time::Duration;
 
 /// Bridge client for making cross-chain payments
@@ -244,6 +244,7 @@ impl BridgeClient {
 
 /// OutLayer withdraw API response
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OutLayerWithdrawResponse {
     /// NEAR transaction hash (if available)
     near_tx: Option<String>,
@@ -256,6 +257,7 @@ struct OutLayerWithdrawResponse {
 }
 
 /// Detect chain from address format
+#[allow(dead_code)]
 pub fn detect_chain(address: &str) -> Option<Chain> {
     // Ethereum-like (0x prefix, 42 chars)
     if address.starts_with("0x") && address.len() == 42 {

@@ -210,6 +210,7 @@ struct PaymentReceipt {
 
 /// Token info for payment processing
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct TokenInfo {
     symbol: String,
     near_token_id: String,
@@ -218,6 +219,7 @@ struct TokenInfo {
 
 /// Cross-chain withdraw response from OutLayer
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct CrossChainResponse {
     near_tx: Option<String>,
     target_tx: String,

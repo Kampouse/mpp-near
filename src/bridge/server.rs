@@ -174,6 +174,7 @@ impl BridgeServer {
 
 /// OutLayer withdraw API response
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OutLayerWithdrawResponse {
     near_tx: Option<String>,
     target_tx: String,
@@ -254,6 +255,7 @@ impl IntoResponse for BridgeError {
 }
 
 /// Run bridge server (convenience function)
+#[allow(dead_code)]
 pub async fn run_bridge(config: BridgeConfig) -> Result<(), Box<dyn std::error::Error>> {
     let server = BridgeServer::new(config);
     server.serve().await
