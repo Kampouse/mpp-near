@@ -27,16 +27,15 @@
 //! cargo test --example end_to_end_test --features client
 //! ```
 
+use std::collections::HashMap;
 use mpp_near::{
-    client::{IntentsProvider, IntentsConfig, NearProvider},
     near_intents::NearIntentsMethod,
     primitives::{
-        Challenge, ChallengeBuilder, Credential, Problem, Receipt, RequestData,
-        VerificationResult, Verifier,
+        Challenge, ChallengeBuilder, Credential, Method, Problem, Receipt, RequestData,
     },
     server::{NearVerifier, VerifierConfig},
     types::{AccountId, Gas, NearAmount},
-    Error, Result,
+    Result,
 };
 use std::time::{Duration, SystemTime};
 use tokio::time::{sleep, timeout};
@@ -187,7 +186,11 @@ async fn test_complete_payment_flow(config: &TestConfig) -> TestResult {
         .request(request)
         .description("Test payment")
         .ttl(config.challenge_ttl)
-        .opaque_data(b"test-opaque".to_vec())
+        .opaque_data({
+            let mut map = HashMap::new();
+            map.insert("test".to_string(), "opaque".to_string());
+            map
+        })
         .secret(config.hmac_secret.clone())
         .build()
     {
@@ -347,7 +350,11 @@ async fn test_challenge_roundtrip(config: &TestConfig) -> TestResult {
         .request(request)
         .description("Test challenge")
         .expires("2025-01-15T12:05:00Z")
-        .opaque_data(b"opaque-data".to_vec())
+        .opaque_data({
+            let mut map = HashMap::new();
+            map.insert("data".to_string(), "opaque".to_string());
+            map
+        })
         .secret(config.hmac_secret.clone())
         .build()
         .unwrap();
@@ -439,9 +446,9 @@ async fn test_receipt_roundtrip() -> TestResult {
 
     // Deserialize from header
     let parsed = match Receipt::from_header(&header) {
-        Ok(r) => r,
-        Err(e) => {
-            return TestResult::new(test_name).failure(format!("Failed to deserialize: {}", e));
+        Some(r) => r,
+        None => {
+            return TestResult::new(test_name).failure("Failed to deserialize".to_string());
         }
     };
 
@@ -472,16 +479,10 @@ async fn test_problem_handling() -> TestResult {
         return TestResult::new(test_name).failure("Wrong problem type");
     }
 
-    // Test not found problem
-    let problem = Problem::not_found("Endpoint not found");
-    if problem.status != 404 {
-        return TestResult::new(test_name).failure("Wrong status code for not found");
-    }
-
-    // Test invalid request problem
-    let problem = Problem::invalid_request("Missing required parameter");
-    if problem.status != 400 {
-        return TestResult::new(test_name).failure("Wrong status code for invalid request");
+    // Test malformed credential problem (instead of invalid request)
+    let problem = Problem::malformed_credential("Missing required parameter");
+    if problem.status != 402 {
+        return TestResult::new(test_name).failure("Wrong status code for malformed credential");
     }
 
     TestResult::new(test_name).success("Problem handling working correctly")
@@ -943,9 +944,9 @@ async fn test_full_http_flow(config: &TestConfig) -> TestResult {
 
     // Step 9: Client verifies receipt
     let extracted_receipt = match Receipt::from_header(&receipt_header) {
-        Ok(r) => r,
-        Err(e) => {
-            return TestResult::new(test_name).failure(format!("Failed to extract receipt: {}", e));
+        Some(r) => r,
+        None => {
+            return TestResult::new(test_name).failure("Failed to extract receipt".to_string());
         }
     };
 
@@ -1008,7 +1009,10 @@ async fn test_multiple_pricing_tiers() -> TestResult {
 // ============================================================================
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
+    // Load .env file
+    dotenv::dotenv().ok();
+
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -1086,6 +1090,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     } else {
         println!("\n❌ Some tests failed!");
-        Err("Tests failed".into())
+        Err(mpp_near::Error::Other("Tests failed".to_string()))
     }
 }
