@@ -3,6 +3,8 @@
 //! This example demonstrates a complete MPP server supporting:
 //! - Standard NEAR payments (on-chain transfers)
 //! - NEAR Intents payments (gasless via OutLayer)
+//! - Cross-chain token support (OMFT tokens)
+//! - Cross-chain withdrawals to 20+ chains
 //! - Multiple pricing tiers
 //! - Full MPP-1.0 spec compliance
 //! - Error handling with RFC 9457 Problem details
@@ -16,7 +18,7 @@
 //! ```bash
 //! export MPP_HMAC_SECRET="your-secret-here"
 //! export MPP_RECIPIENT="merchant.near"
-//! export OUTLAYER_API_KEY="your-api-key"  # Optional for intents
+//! export OUTLAYER_API_KEY="your-api-key"  # Required for cross-chain withdrawals
 //! export MPP_RPC_URL="https://rpc.mainnet.near.org"
 //! ```
 
@@ -341,6 +343,179 @@ async fn get_pricing(
     }))
 }
 
+/// Cross-chain withdrawal request
+#[derive(Debug, Deserialize)]
+struct WithdrawRequest {
+    /// Destination address (can be NEAR account or other chain address)
+    to: String,
+    /// Amount in human-readable format (e.g., "1.5" for 1.5 USDC)
+    amount: String,
+    /// Token to withdraw (e.g., "usdc", "near", or full token ID)
+    token: String,
+    /// Destination chain (near, ethereum, solana, bitcoin, etc.)
+    #[serde(default = "default_chain")]
+    chain: String,
+}
+
+fn default_chain() -> String {
+    "near".to_string()
+}
+
+/// Cross-chain withdrawal endpoint
+/// Allows withdrawing received payments to other chains
+async fn withdraw_cross_chain(
+    State(state): State<ServerState>,
+    Json(req): Json<WithdrawRequest>,
+) -> Response {
+    // Check if OutLayer API key is configured
+    let api_key = match state.config.intents_api_key.as_ref() {
+        Some(key) => key,
+        None => {
+            let mut problem = Problem::new(mpp_near::primitives::ProblemType::Custom(
+                "https://mpp.dev/problems/not-configured".to_string(),
+            ));
+            problem.detail = Some("OutLayer API key not configured. Set OUTLAYER_API_KEY environment variable.".to_string());
+            problem.status = 500;
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(problem)).into_response();
+        }
+    };
+
+    // Parse amount
+    let amount_f64 = match req.amount.parse::<f64>() {
+        Ok(a) => a,
+        Err(e) => {
+            let mut problem = Problem::new(mpp_near::primitives::ProblemType::Custom(
+                "https://mpp.dev/problems/invalid-amount".to_string(),
+            ));
+            problem.detail = Some(format!("Invalid amount: {}", e));
+            problem.status = 400;
+            return (StatusCode::BAD_REQUEST, Json(problem)).into_response();
+        }
+    };
+
+    // Determine token ID
+    let token_id = match req.token.to_lowercase().as_str() {
+        "usdc" => "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+        "usdt" => "usdt.tether-token.near",
+        "near" => "near",
+        _ => &req.token, // Use as-is for custom tokens (e.g., btc.omft.near)
+    };
+
+    // Calculate amount in smallest denomination
+    let decimals = match token_id {
+        "near" => 24,
+        "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1" => 6, // USDC
+        "usdt.tether-token.near" => 6, // USDT
+        _ => 18, // Default for most tokens
+    };
+
+    let amount_smallest = (amount_f64 * 10_f64.powi(decimals) as f64) as u64;
+
+    // Call OutLayer API for cross-chain withdrawal
+    let client = reqwest::Client::new();
+    let outlayer_url = std::env::var("OUTLAYER_API_URL")
+        .unwrap_or_else(|_| "https://api.outlayer.fastnear.com".to_string());
+
+    let payload = serde_json::json!({
+        "to": req.to,
+        "amount": amount_smallest.to_string(),
+        "token": token_id,
+        "chain": req.chain.to_lowercase()
+    });
+
+    let endpoint = format!("{}/wallet/v1/intents/withdraw", outlayer_url);
+
+    let response = match client
+        .post(&endpoint)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let mut problem = Problem::new(mpp_near::primitives::ProblemType::Custom(
+                "https://mpp.dev/problems/withdrawal-failed".to_string(),
+            ));
+            problem.detail = Some(format!("OutLayer API request failed: {}", e));
+            problem.status = 500;
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(problem)).into_response();
+        }
+    };
+
+    if !response.status().is_success() {
+        let error_text: String = response.text().await.unwrap_or_default();
+        let mut problem = Problem::new(mpp_near::primitives::ProblemType::Custom(
+            "https://mpp.dev/problems/withdrawal-failed".to_string(),
+        ));
+        problem.detail = Some(format!("OutLayer API error: {}", error_text));
+        problem.status = 500;
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(problem)).into_response();
+    }
+
+    let response_json: serde_json::Value = match response.json().await {
+        Ok(j) => j,
+        Err(e) => {
+            let mut problem = Problem::new(mpp_near::primitives::ProblemType::Custom(
+                "https://mpp.dev/problems/withdrawal-failed".to_string(),
+            ));
+            problem.detail = Some(format!("Failed to parse response: {}", e));
+            problem.status = 500;
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(problem)).into_response();
+        }
+    };
+
+    let tx_hash = response_json
+        .get("request_id")
+        .or_else(|| response_json.get("intent_hash"))
+        .or_else(|| response_json.get("hash"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    Json(serde_json::json!({
+        "status": "success",
+        "message": "Cross-chain withdrawal initiated",
+        "withdrawal": {
+            "to": req.to,
+            "amount": req.amount,
+            "token": req.token,
+            "chain": req.chain,
+            "transaction": tx_hash
+        }
+    })).into_response()
+}
+
+/// Get supported chains for cross-chain withdrawals
+async fn get_supported_chains() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "supported_chains": [
+            {"id": "near", "name": "NEAR Protocol", "native_token": "NEAR"},
+            {"id": "ethereum", "name": "Ethereum", "native_token": "ETH"},
+            {"id": "solana", "name": "Solana", "native_token": "SOL"},
+            {"id": "bitcoin", "name": "Bitcoin", "native_token": "BTC"},
+            {"id": "arbitrum", "name": "Arbitrum", "native_token": "ETH"},
+            {"id": "base", "name": "Base", "native_token": "ETH"},
+            {"id": "polygon", "name": "Polygon", "native_token": "MATIC"},
+            {"id": "optimism", "name": "Optimism", "native_token": "ETH"},
+            {"id": "avalanche", "name": "Avalanche", "native_token": "AVAX"},
+            {"id": "bsc", "name": "Binance Smart Chain", "native_token": "BNB"},
+            {"id": "ton", "name": "TON", "native_token": "TON"},
+            {"id": "aptos", "name": "Aptos", "native_token": "APT"},
+            {"id": "sui", "name": "Sui", "native_token": "SUI"},
+            {"id": "starknet", "name": "StarkNet", "native_token": "ETH"},
+            {"id": "tron", "name": "Tron", "native_token": "TRX"},
+            {"id": "stellar", "name": "Stellar", "native_token": "XLM"},
+            {"id": "dogecoin", "name": "Dogecoin", "native_token": "DOGE"},
+            {"id": "xrp", "name": "XRP", "native_token": "XRP"},
+            {"id": "zcash", "name": "Zcash", "native_token": "ZEC"},
+            {"id": "litecoin", "name": "Litecoin", "native_token": "LTC"},
+        ],
+        "note": "Withdrawals are gasless and executed via NEAR Intents protocol",
+        "documentation": "https://docs.outlayer.ai"
+    }))
+}
+
 /// Main API handler - creates challenge or processes request with payment
 async fn api_handler(
     State(state): State<ServerState>,
@@ -576,6 +751,8 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/pricing", get(get_pricing))
+        .route("/chains", get(get_supported_chains))
+        .route("/withdraw", axum::routing::post(withdraw_cross_chain))
         .route("/api/v1/ping", axum::routing::any(api_handler))
         .route("/api/v1/analyze", axum::routing::any(api_handler))
         .route("/api/v1/generate", axum::routing::any(api_handler))
@@ -594,23 +771,35 @@ async fn main() -> Result<()> {
     println!("╠════════════════════════════════════════════════════════════╣");
     println!("║  Recipient: {:<48} ║", config.recipient);
     println!("║  Challenge TTL: {:<45} ║", config.challenge_ttl);
-    println!("║  Payment Methods: near, near-intents                    ║");
+    println!("║  Payment Methods: near, near-intents, cross-chain        ║");
     println!("╠════════════════════════════════════════════════════════════╣");
-    println!("║  Endpoints:                                             ║");
+    println!("║  Paid Endpoints:                                         ║");
     for (path, pricing) in &config.pricing.entries {
-        let status = if pricing.amount == "0" { "FREE" } else { "PAID" };
-        println!("║  {:<20} {:<10} {} {:<20} ║", path, status, pricing.amount, pricing.currency);
+        if pricing.amount != "0" {
+            println!("║  {:<20} {} {:<20} ║", path, pricing.amount, pricing.currency);
+        }
     }
+    println!("╠════════════════════════════════════════════════════════════╣");
+    println!("║  Management Endpoints:                                    ║");
+    println!("║  GET  /health          - Health check (free)              ║");
+    println!("║  GET  /pricing         - List endpoint pricing            ║");
+    println!("║  GET  /chains          - List supported chains            ║");
+    println!("║  POST /withdraw        - Cross-chain withdrawal           ║");
     println!("╠════════════════════════════════════════════════════════════╣");
     println!("║  Example curl commands:                                  ║");
     println!("║  # Get pricing:                                           ║");
     println!("║  curl http://localhost:3000/pricing                       ║");
     println!("║                                                          ║");
-    println!("║  # Paid request (without payment - gets challenge):     ║");
-    println!("║  curl http://localhost:3000/api/v1/ping                  ║");
+    println!("║  # Get supported chains:                                  ║");
+    println!("║  curl http://localhost:3000/chains                        ║");
     println!("║                                                          ║");
-    println!("║  # Free request:                                         ║");
-    println!("║  curl http://localhost:3000/health                       ║");
+    println!("║  # Withdraw to Solana:                                    ║");
+    println!("║  curl -X POST http://localhost:3000/withdraw \\            ║");
+    println!("║    -H 'Content-Type: application/json' \\                 ║");
+    println!("║    -d '{{\"to\":\"addr\",\"amount\":\"1\",\"token\":\"usdc\"}}'   ║");
+    println!("║                                                          ║");
+    println!("║  # Paid request (gets 402 challenge):                    ║");
+    println!("║  curl http://localhost:3000/api/v1/ping                  ║");
     println!("╚════════════════════════════════════════════════════════════╝");
 
     // Start server
