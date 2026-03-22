@@ -318,6 +318,9 @@ enum AgentCommand {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load .env file if it exists (it will be ignored if not found)
+    dotenv::dotenv().ok();
+
     let mut cli = Cli::parse();
 
     // Load config file
@@ -571,7 +574,7 @@ async fn cmd_pay(cli: &Cli, recipient: &str, amount: &str, token: &str, memo: Op
 
                 let provider = IntentsProvider::new(api_key.clone());
 
-                let result = match token {
+                let result = match token.to_lowercase().as_str() {
                     "near" => provider.transfer(&recipient, near_amount).await,
                     "usdc" => provider.transfer_token(
                         "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
@@ -727,7 +730,7 @@ async fn cmd_register() -> Result<()> {
     Ok(())
 }
 
-async fn cmd_fund_link(_cli: &Cli, _amount: &str, _token: &str, _memo: Option<&str>, _intents: bool) -> Result<()> {
+async fn cmd_fund_link(cli: &Cli, amount: &str, token: &str, memo: Option<&str>, intents: bool) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -865,7 +868,7 @@ async fn cmd_balance(cli: &Cli, account: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_verify(_cli: &Cli, tx_hash: &str, expected_amount: Option<&str>, expected_recipient: Option<&str>) -> Result<()> {
+async fn cmd_verify(cli: &Cli, tx_hash: &str, expected_amount: Option<&str>, expected_recipient: Option<&str>) -> Result<()> {
     print_info(&format!("Verifying transaction: {}", tx_hash));
 
     println!();
@@ -887,7 +890,7 @@ async fn cmd_verify(_cli: &Cli, tx_hash: &str, expected_amount: Option<&str>, ex
     Ok(())
 }
 
-async fn cmd_storage_deposit(_cli: &Cli, _account: Option<&str>, _token: &str) -> Result<()> {
+async fn cmd_storage_deposit(cli: &Cli, account: Option<&str>, token: &str) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -924,7 +927,7 @@ async fn cmd_storage_deposit(_cli: &Cli, _account: Option<&str>, _token: &str) -
     }
 }
 
-async fn cmd_server(_cli: &Cli, port: u16, recipient: &str, min_amount: &str) -> Result<()> {
+async fn cmd_server(cli: &Cli, port: u16, recipient: &str, min_amount: &str) -> Result<()> {
     #[cfg(feature = "server")]
     {
         let recipient_account = AccountId::new(recipient)?;
@@ -980,7 +983,7 @@ async fn cmd_server(_cli: &Cli, port: u16, recipient: &str, min_amount: &str) ->
     Ok(())
 }
 
-async fn cmd_tokens(_cli: &Cli) -> Result<()> {
+async fn cmd_tokens(cli: &Cli) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -1024,7 +1027,7 @@ async fn cmd_tokens(_cli: &Cli) -> Result<()> {
     }
 }
 
-async fn cmd_create_check(_cli: &Cli, _amount: &str, _token: &str, _memo: Option<&str>, _expires_in: u64) -> Result<()> {
+async fn cmd_create_check(cli: &Cli, amount: &str, token: &str, memo: Option<&str>, expires_in: u64) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -1067,7 +1070,7 @@ async fn cmd_create_check(_cli: &Cli, _amount: &str, _token: &str, _memo: Option
     }
 }
 
-async fn cmd_claim_check(_cli: &Cli, _check_key: &str, _amount: Option<&str>) -> Result<()> {
+async fn cmd_claim_check(cli: &Cli, check_key: &str, amount: Option<&str>) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -1094,7 +1097,7 @@ async fn cmd_claim_check(_cli: &Cli, _check_key: &str, _amount: Option<&str>) ->
     }
 }
 
-async fn cmd_swap(_cli: &Cli, _from: &str, _to: &str, _amount: &str) -> Result<()> {
+async fn cmd_swap(cli: &Cli, from: &str, to: &str, amount: &str) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
