@@ -72,6 +72,9 @@ pub mod near_intents;
 // Client module (always available)
 pub mod client;
 
+// Bridge module for cross-chain payments
+pub mod bridge;
+
 // Re-export primitives for convenience
 pub use primitives::{
     Challenge, ChallengeBuilder, RequestData,

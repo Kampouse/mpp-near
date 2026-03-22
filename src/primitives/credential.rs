@@ -256,7 +256,7 @@ impl Default for CredentialBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::challenge::RequestData;
+    use crate::primitives::challenge::RequestData;
     
     fn test_challenge() -> Challenge {
         let req = RequestData::new("1000", "acct_123");

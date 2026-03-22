@@ -274,8 +274,8 @@ mod tests {
                 &self,
                 _challenge: &Challenge,
                 _credential: &Credential,
-            ) -> crate::primitives::Result<VerificationResult> {
-                Ok(VerificationResult::valid("1.0", "TEST"))
+            ) -> crate::primitives::Result<crate::primitives::VerificationResult> {
+                Ok(crate::primitives::VerificationResult::valid("1.0", "TEST"))
             }
         }
         

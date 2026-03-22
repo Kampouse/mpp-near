@@ -7,6 +7,7 @@
 //!
 //! - **Auto-402 detection**: Automatically detects payment-required responses
 //! - **Gasless payments**: Uses OutLayer API for feeless transactions
+//! - **Cross-chain support**: Bridge payments to Ethereum, Solana, Bitcoin, etc.
 //! - **Budget controls**: Per-request and daily spending limits
 //! - **Session caching**: Avoid re-paying for the same resource
 //! - **Receipt caching**: Reuse payment proofs for identical challenges
@@ -32,6 +33,23 @@
 //!     
 //!     Ok(())
 //! }
+//! ```
+//!
+//! # Cross-Chain Payments
+//!
+//! The client automatically detects when payment is required on a different chain
+//! and uses the MPP Bridge to forward payments:
+//!
+//! ```rust,no_run
+//! # use mpp_near::client::AgentClient;
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let client = AgentClient::new("wk_your_api_key");
+//!
+//! // Server returns: 402 "Pay 1 USDC to 0xABC... on Ethereum"
+//! // Client automatically bridges via NEAR Intents + OutLayer
+//! let data = client.get("https://ethereum-mpp-api.com/data").await?;
+//! # Ok(())
+//! # }
 //! ```
 
 use reqwest::{Client, Response, header};
@@ -182,6 +200,28 @@ struct PaymentReceipt {
     intent_hash: Option<String>,
     timestamp: Option<u64>,
     amount_out: Option<String>,
+    /// NEAR transaction hash (for cross-chain payments)
+    near_tx_hash: Option<String>,
+    /// Target chain transaction hash (for cross-chain payments)
+    target_tx_hash: Option<String>,
+    /// Target chain name (for cross-chain payments)
+    target_chain: Option<String>,
+}
+
+/// Token info for payment processing
+#[derive(Debug, Clone)]
+struct TokenInfo {
+    symbol: String,
+    near_token_id: String,
+    decimals: u8,
+}
+
+/// Cross-chain withdraw response from OutLayer
+#[derive(Debug, Deserialize)]
+struct CrossChainResponse {
+    near_tx: Option<String>,
+    target_tx: String,
+    status: String,
 }
 
 /// Parsed 402 challenge
@@ -614,7 +654,17 @@ impl AgentClient {
     }
     
     /// Pay challenge via OutLayer API
+    /// 
+    /// Automatically detects if recipient is on a different chain and uses
+    /// cross-chain bridge if needed.
     async fn pay_challenge(&self, challenge: &Challenge402) -> Result<PaymentReceipt, AgentError> {
+        // Check if this is a cross-chain payment
+        if let Some(target_chain) = self.detect_cross_chain(&challenge.recipient) {
+            tracing::info!("🌉 Cross-chain payment detected: {} → {}", challenge.recipient, target_chain);
+            return self.pay_cross_chain(challenge, &target_chain).await;
+        }
+        
+        // Native NEAR payment
         let token_id = self.get_token_id(&challenge.token);
         let amount_raw = self.amount_to_raw(challenge.amount, &challenge.token);
         
@@ -639,7 +689,7 @@ impl AgentClient {
             return Err(AgentError::PaymentFailed(error_text));
         }
         
-        let receipt: PaymentReceipt = resp.json().await
+        let mut receipt: PaymentReceipt = resp.json().await
             .map_err(|e| AgentError::ParseError(e.to_string()))?;
         
         if receipt.status != "success" {
@@ -647,6 +697,11 @@ impl AgentClient {
                 "Payment status: {}", receipt.status
             )));
         }
+        
+        // Ensure cross-chain fields are None for native payments
+        receipt.near_tx_hash = None;
+        receipt.target_tx_hash = None;
+        receipt.target_chain = None;
         
         Ok(receipt)
     }
@@ -673,9 +728,19 @@ impl AgentClient {
     }
     
     /// Build base64 credential
+    /// 
+    /// For cross-chain payments, includes target chain tx hash instead of NEAR intent hash.
     fn build_credential(&self, receipt: &PaymentReceipt, challenge: &Challenge402) -> String {
+        // For cross-chain payments, use target chain tx hash
+        // This allows standard MPP servers to verify the payment normally
+        let tx_hash = if let Some(ref target_tx) = receipt.target_tx_hash {
+            target_tx.clone()
+        } else {
+            receipt.intent_hash.clone().unwrap_or_default()
+        };
+        
         let cred = serde_json::json!({
-            "intent_hash": receipt.intent_hash,
+            "tx": tx_hash,
             "challenge": challenge.challenge,
             "nonce": challenge.nonce,
             "timestamp": receipt.timestamp.unwrap_or_else(|| {
@@ -684,6 +749,8 @@ impl AgentClient {
                     .unwrap()
                     .as_millis() as u64
             }),
+            // Include chain info for cross-chain payments
+            "chain": receipt.target_chain.clone().unwrap_or_else(|| "near".into()),
         });
         
         general_purpose::URL_SAFE_NO_PAD.encode(cred.to_string())
@@ -709,6 +776,112 @@ impl AgentClient {
         };
         
         (amount * 10f64.powi(decimals as i32)) as u128
+    }
+    
+    /// Detect if recipient is on a different chain
+    /// 
+    /// Returns Some(chain) if the recipient address format matches a non-NEAR chain
+    fn detect_cross_chain(&self, recipient: &str) -> Option<String> {
+        // Ethereum-like (0x prefix, 42 chars)
+        if recipient.starts_with("0x") && recipient.len() == 42 {
+            return Some("ethereum".into());
+        }
+        
+        // Bitcoin (1, 3, or bc1 prefix)
+        if recipient.starts_with("1") || recipient.starts_with("3") || recipient.starts_with("bc1") {
+            return Some("bitcoin".into());
+        }
+        
+        // Solana (Base58, 32-44 chars, alphanumeric without 0, O, I, l)
+        if recipient.len() >= 32 && recipient.len() <= 44 {
+            let base58_chars = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+            if recipient.chars().all(|c| base58_chars.contains(c)) {
+                return Some("solana".into());
+            }
+        }
+        
+        // NEAR (.near or .testnet suffix, or 64-char hex)
+        if recipient.ends_with(".near") || recipient.ends_with(".testnet") ||
+           (recipient.len() == 64 && recipient.chars().all(|c| c.is_ascii_hexdigit())) {
+            return None; // Native NEAR, no bridging needed
+        }
+        
+        None
+    }
+    
+    /// Pay via cross-chain bridge
+    /// 
+    /// Used when the recipient is on a different chain (Ethereum, Solana, Bitcoin, etc.)
+    async fn pay_cross_chain(&self, challenge: &Challenge402, target_chain: &str) -> Result<PaymentReceipt, AgentError> {
+        let token_info = self.get_token_info(&challenge.token);
+        let amount_raw = (challenge.amount * 10f64.powi(token_info.decimals as i32)) as u64;
+        
+        // Call OutLayer cross-chain withdraw directly
+        let url = format!("{}/wallet/v1/intents/withdraw", self.outlayer_url);
+        
+        let withdraw_request = serde_json::json!({
+            "to": challenge.recipient,
+            "amount": amount_raw.to_string(),
+            "token": token_info.near_token_id,
+            "chain": target_chain,
+        });
+        
+        let resp = self.http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&withdraw_request)
+            .send()
+            .await?;
+        
+        if !resp.status().is_success() {
+            let error_text = resp.text().await.unwrap_or_else(|_| "Unknown error".into());
+            return Err(AgentError::PaymentFailed(format!(
+                "Cross-chain withdraw failed: {}", error_text
+            )));
+        }
+        
+        let withdraw_response: CrossChainResponse = resp.json().await
+            .map_err(|e| AgentError::ParseError(e.to_string()))?;
+        
+        // Build receipt with target chain tx hash
+        Ok(PaymentReceipt {
+            status: "success".into(),
+            intent_hash: Some(withdraw_response.target_tx.clone()),
+            near_tx_hash: withdraw_response.near_tx,
+            target_tx_hash: Some(withdraw_response.target_tx),
+            target_chain: Some(target_chain.into()),
+            timestamp: Some(SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64),
+            amount_out: None,
+        })
+    }
+    
+    /// Get token info (symbol, token_id, decimals)
+    fn get_token_info(&self, token: &str) -> TokenInfo {
+        match token.to_lowercase().as_str() {
+            "usdc" => TokenInfo {
+                symbol: "USDC".into(),
+                near_token_id: "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1".into(),
+                decimals: 6,
+            },
+            "usdt" => TokenInfo {
+                symbol: "USDT".into(),
+                near_token_id: "usdt.tether-token.near".into(),
+                decimals: 6,
+            },
+            "near" => TokenInfo {
+                symbol: "NEAR".into(),
+                near_token_id: "near".into(),
+                decimals: 24,
+            },
+            _ => TokenInfo {
+                symbol: token.into(),
+                near_token_id: token.into(),
+                decimals: 24,
+            },
+        }
     }
 }
 
