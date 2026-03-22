@@ -18,6 +18,8 @@ use mpp_near::client::IntentsProvider;
 #[cfg(feature = "server")]
 use mpp_near::server::{NearVerifier, VerifierConfig};
 
+use mpp_near::bridge::{BridgeClient, BridgeRequest};
+
 /// Configuration file structure
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -100,6 +102,10 @@ struct Cli {
     /// API key for intents provider (wk_...)
     #[arg(long, global = true)]
     api_key: Option<String>,
+
+    /// Bridge URL for cross-chain payments
+    #[arg(long, global = true)]
+    bridge_url: Option<String>,
 
     /// Verbose output
     #[arg(short, long, global = true)]
@@ -249,6 +255,25 @@ enum Commands {
         /// Amount to swap
         #[arg(short = 'n', long)]
         amount: String,
+    },
+
+    /// Cross-chain bridge payment (NEAR to Ethereum/Solana/Bitcoin/etc.)
+    Bridge {
+        /// Recipient address on target chain
+        #[arg(long)]
+        to: String,
+
+        /// Amount to send (in USD)
+        #[arg(long)]
+        amount: f64,
+
+        /// Token to send (usdc, usdt, btc, eth, sol)
+        #[arg(long, default_value = "usdc")]
+        token: String,
+
+        /// Target chain (ethereum, solana, bitcoin, arbitrum, base, polygon, etc.)
+        #[arg(long)]
+        chain: String,
     },
 
     /// Show current configuration
@@ -429,6 +454,10 @@ async fn main() -> Result<()> {
 
         Commands::Swap { from, to, amount } => {
             cmd_swap(&cli, from, to, amount).await?;
+        }
+
+        Commands::Bridge { to, amount, token, chain } => {
+            cmd_bridge(&cli, to, *amount, token, chain).await?;
         }
 
         Commands::Config => {
@@ -1260,4 +1289,41 @@ fn print_info(message: &str) {
     if std::env::var("MPP_NEAR_QUIET").is_err() {
         eprintln!("{} {}", "ℹ".blue(), message);
     }
+}
+
+async fn cmd_bridge(cli: &Cli, to: &str, amount: f64, token: &str, chain: &str) -> Result<()> {
+    let api_key = cli.api_key.as_ref()
+        .ok_or_else(|| anyhow::anyhow!("--api-key required for bridge payments"))?;
+
+    print_info(&format!("Bridging {} {} to {} on {}...", amount, token, to, chain));
+
+    let bridge_url = cli.bridge_url.clone()
+        .unwrap_or_else(|| "https://bridge.mpp.dev".to_string());
+    
+    let bridge = BridgeClient::new(bridge_url, api_key);
+
+    let request = BridgeRequest {
+        nonce: uuid::Uuid::new_v4().to_string(),
+        recipient: to.to_string(),
+        amount,
+        token: token.to_string(),
+        target_chain: chain.to_string(),
+        challenge: None,
+    };
+
+    let response = bridge.pay_direct(request).await
+        .map_err(|e| anyhow::anyhow!("Bridge payment failed: {}", e.message))?;
+
+    print_success("Cross-chain payment submitted!");
+    println!();
+    println!("  {} Transaction Details {}", "━".repeat(20), "━".repeat(20));
+    println!("  NEAR TX:      {}", response.near_tx);
+    println!("  {} TX:    {}", chain.to_uppercase(), response.target_tx);
+    println!("  Amount:       {} {}", response.amount, response.token);
+    println!("  Status:       {:?}", response.status);
+    println!();
+    println!("  {} Use this tx hash as your MPP credential:", "ℹ".blue());
+    println!("  {}", response.target_tx);
+
+    Ok(())
 }
