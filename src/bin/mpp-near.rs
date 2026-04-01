@@ -788,7 +788,7 @@ async fn cmd_register() -> Result<()> {
     Ok(())
 }
 
-async fn cmd_fund_link(_cli: &Cli, _amount: &str, _token: &str, _memo: Option<&str>, _intents: bool) -> Result<()> {
+async fn cmd_fund_link(cli: &Cli, amount: &str, token: &str, memo: Option<&str>, intents: bool) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -889,13 +889,26 @@ async fn cmd_balance(cli: &Cli, account: Option<&str>) -> Result<()> {
                 println!("  Account: {}", account_id);
                 println!("  Balance: {}", balance);
 
-                // Try to get USDC balance
-                match provider.check_intents_balance("17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1").await {
-                    Ok(usdc) => {
-                        let usdc_amount = usdc.0 as f64 / 1_000_000.0;
-                        println!("  USDC:    {:.6}", usdc_amount);
+                // Check balances for all supported tokens
+                let tokens_to_check = [
+                    ("USDC", "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1", 1_000_000u128),
+                    ("ZEC",  "zec.omft.near", 100_000_000u128),
+                    ("BTC",  "btc.omft.near", 100_000_000u128),
+                    ("ETH",  "eth.omft.near", 1_000_000_000_000_000_000u128),
+                    ("SOL",  "sol.omft.near", 1_000_000_000u128),
+                    ("wNEAR","wrap.near", 1_000_000_000_000_000_000_000_000u128),
+                ];
+
+                for (name, token_id, divisor) in &tokens_to_check {
+                    match provider.check_intents_balance(token_id).await {
+                        Ok(bal) => {
+                            let amount = bal.0 as f64 / *divisor as f64;
+                            if amount > 0.0 {
+                                println!("  {:6}:  {:.8}", name, amount);
+                            }
+                        }
+                        Err(_) => {}
                     }
-                    Err(_) => {}
                 }
             }
 
@@ -926,7 +939,7 @@ async fn cmd_balance(cli: &Cli, account: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_verify(_cli: &Cli, tx_hash: &str, expected_amount: Option<&str>, expected_recipient: Option<&str>) -> Result<()> {
+async fn cmd_verify(cli: &Cli, tx_hash: &str, expected_amount: Option<&str>, expected_recipient: Option<&str>) -> Result<()> {
     print_info(&format!("Verifying transaction: {}", tx_hash));
 
     println!();
@@ -948,7 +961,7 @@ async fn cmd_verify(_cli: &Cli, tx_hash: &str, expected_amount: Option<&str>, ex
     Ok(())
 }
 
-async fn cmd_storage_deposit(_cli: &Cli, _account: Option<&str>, _token: &str) -> Result<()> {
+async fn cmd_storage_deposit(cli: &Cli, account: Option<&str>, token: &str) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -985,7 +998,7 @@ async fn cmd_storage_deposit(_cli: &Cli, _account: Option<&str>, _token: &str) -
     }
 }
 
-async fn cmd_server(_cli: &Cli, port: u16, recipient: &str, min_amount: &str) -> Result<()> {
+async fn cmd_server(cli: &Cli, port: u16, recipient: &str, min_amount: &str) -> Result<()> {
     #[cfg(feature = "server")]
     {
         let recipient_account = AccountId::new(recipient)?;
@@ -1041,7 +1054,7 @@ async fn cmd_server(_cli: &Cli, port: u16, recipient: &str, min_amount: &str) ->
     Ok(())
 }
 
-async fn cmd_tokens(_cli: &Cli) -> Result<()> {
+async fn cmd_tokens(cli: &Cli) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -1085,7 +1098,7 @@ async fn cmd_tokens(_cli: &Cli) -> Result<()> {
     }
 }
 
-async fn cmd_create_check(_cli: &Cli, _amount: &str, _token: &str, _memo: Option<&str>, _expires_in: u64) -> Result<()> {
+async fn cmd_create_check(cli: &Cli, amount: &str, token: &str, memo: Option<&str>, expires_in: u64) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -1128,7 +1141,7 @@ async fn cmd_create_check(_cli: &Cli, _amount: &str, _token: &str, _memo: Option
     }
 }
 
-async fn cmd_claim_check(_cli: &Cli, _check_key: &str, _amount: Option<&str>) -> Result<()> {
+async fn cmd_claim_check(cli: &Cli, check_key: &str, amount: Option<&str>) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -1155,7 +1168,7 @@ async fn cmd_claim_check(_cli: &Cli, _check_key: &str, _amount: Option<&str>) ->
     }
 }
 
-async fn cmd_swap(_cli: &Cli, _from: &str, _to: &str, _amount: &str) -> Result<()> {
+async fn cmd_swap(cli: &Cli, from: &str, to: &str, amount: &str) -> Result<()> {
     #[cfg(feature = "intents")]
     {
         let api_key = cli.api_key.as_ref()
@@ -1253,6 +1266,10 @@ fn parse_amount_token(amount: &str, token: &str) -> Result<mpp_near::types::Near
     let yocto = match token {
         "near" => (value * 1e24) as u128,
         "usdc" | "usdt" => (value * 1e6) as u128,
+        "zec" | "btc" | "doge" | "ltc" | "nbtc" => (value * 1e8) as u128,
+        "sol" | "sui" => (value * 1e9) as u128,
+        "eth" => (value * 1e18) as u128,
+        "ada" | "xrp" => (value * 1e6) as u128,
         _ => (value * 1e24) as u128, // Default to NEAR decimals
     };
 
@@ -1276,6 +1293,16 @@ fn get_swap_token_id(token: &str) -> String {
         "near" | "wnear" => "nep141:wrap.near".to_string(),
         "usdc" => "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1".to_string(),
         "usdt" => "nep141:usdt.tether-token.near".to_string(),
+        "zec" => "nep141:zec.omft.near".to_string(),
+        "btc" => "nep141:btc.omft.near".to_string(),
+        "eth" => "nep141:eth.omft.near".to_string(),
+        "sol" => "nep141:sol.omft.near".to_string(),
+        "sol" => "nep141:sol.omft.near".to_string(),
+        "xrp" => "nep141:xrp.omft.near".to_string(),
+        "doge" => "nep141:doge.omft.near".to_string(),
+        "ltc" => "nep141:ltc.omft.near".to_string(),
+        "ada" => "nep141:cardano.omft.near".to_string(),
+        "sui" => "nep141:sui.omft.near".to_string(),
         _ if token.starts_with("nep141:") => token.to_string(),
         _ => format!("nep141:{}", token),
     }

@@ -13,3 +13,5 @@
 # MPP-NEAR config files (contains API keys)
 .mpp-config
 .mpp-near/
+mpp-near-outlayer/target/
+mpp-near-outlayer/Cargo.lock
